@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "objective": "Normalizar nomes preservando as palavras e a capitalização.",
+  "acceptance": ["A API normalize_name passa todos os testes de regressão existentes."],
+  "integration_checks": ["unit"],
+  "tasks": [
+    {
+      "id": "NAME-1",
+      "tier": "luna",
+      "objective": "Corrigir normalize_name: remover espaços externos e reduzir sequências de whitespace a um espaço. Rejeitar entradas não string com TypeError.",
+      "scope": ["textutil.py"],
+      "acceptance": [
+        "Espaços externos são removidos e whitespace interno é normalizado sem alterar capitalização.",
+        "String vazia produz string vazia; entradas não string levantam TypeError."
+      ],
+      "checks": ["unit"],
+      "depends_on": []
+    }
+  ]
+}
