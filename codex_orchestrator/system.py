@@ -1,6 +1,5 @@
-"""Filesystem, process, Git and configuration boundaries."""
+"""Filesystem, process and Git boundaries; no shell evaluation."""
 from __future__ import annotations
-
 import contextlib
 import hashlib
 import json
@@ -9,10 +8,10 @@ import signal
 import subprocess
 import sys
 import tempfile
-import tomllib
+import time
 from pathlib import Path
-
-from .contracts import DEFAULT_MODELS, OrchestratorError, in_scope, safe_path
+from .config import load_config
+from .contracts import OrchestratorError, in_scope, safe_path
 
 
 def atomic_json(path: Path, data) -> None:
@@ -29,10 +28,8 @@ def atomic_json(path: Path, data) -> None:
         if os.path.exists(tmp):
             os.unlink(tmp)
 
-
 @contextlib.contextmanager
 def exclusive(path: Path):
-    """OS advisory lock; the OS releases it after a crash (no stale PID lock)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+b") as handle:
         try:
@@ -58,10 +55,10 @@ def exclusive(path: Path):
                 fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def command(argv: list[str], cwd: Path, timeout: int = 30) -> bytes:
+def command(argv: list[str], cwd: Path, timeout=30, data: bytes | None = None) -> bytes:
     try:
-        result = subprocess.run(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                timeout=timeout, check=False)
+        result = subprocess.run(argv, cwd=cwd, input=data, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise OrchestratorError(f"Command failed: {argv[0]}: {exc}") from exc
     if result.returncode:
@@ -72,143 +69,122 @@ def command(argv: list[str], cwd: Path, timeout: int = 30) -> bytes:
 def git(root: Path, *args: str) -> str:
     return command(["git", "-c", "core.quotepath=false", *args], root).decode("utf-8", errors="strict").strip()
 
-
 def repo_root(path: Path) -> Path:
     return Path(git(path.resolve(), "rev-parse", "--show-toplevel")).resolve()
 
-
 def store_root(root: Path) -> Path:
-    common = Path(git(root, "rev-parse", "--git-common-dir"))
-    return (root / common).resolve() / "codex-orchestrator"
-
+    return (root / Path(git(root, "rev-parse", "--git-common-dir"))).resolve() / "codex-orchestrator"
 
 def changed(root: Path) -> list[str]:
-    tracked = command(["git", "diff", "--no-renames", "--name-only", "-z", "HEAD"], root)
-    staged = command(["git", "diff", "--cached", "--no-renames", "--name-only", "-z", "HEAD"], root)
-    new = command(["git", "ls-files", "--others", "--exclude-standard", "-z"], root)
-    return sorted({p.decode("utf-8") for p in (tracked + staged + new).split(b"\0") if p})
+    data = command(["git", "diff", "--no-renames", "--name-only", "-z", "HEAD"], root)
+    data += command(["git", "ls-files", "--others", "--exclude-standard", "-z"], root)
+    return sorted({p.decode("utf-8") for p in data.split(b"\0") if p})
 
+def file_hash(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 def snapshot(root: Path) -> str:
     h = hashlib.sha256(git(root, "rev-parse", "HEAD").encode())
     for args in (("diff", "--binary", "--no-ext-diff", "--no-renames", "HEAD"),
                  ("diff", "--cached", "--binary", "--no-ext-diff", "--no-renames", "HEAD")):
         h.update(command(["git", *args], root))
-    for path in changed(root):
-        file = root / path
-        h.update(path.encode())
-        if file.is_symlink():
-            h.update(b"symlink:" + os.readlink(file).encode())
-        elif file.is_file():
-            h.update(str(file.stat().st_mode & 0o777).encode())
-            with file.open("rb") as stream:
-                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                    h.update(chunk)
-        elif not file.exists():
+    for name in changed(root):
+        path = root / name
+        h.update(name.encode())
+        if path.is_symlink():
+            h.update(b"symlink:" + os.readlink(path).encode())
+        elif path.is_file():
+            h.update(str(path.stat().st_mode & 0o777).encode())
+            h.update(file_hash(path).encode())
+        elif not path.exists():
             h.update(b"deleted")
         else:
-            raise OrchestratorError(f"Unsupported changed file: {path}")
+            raise OrchestratorError(f"Unsupported changed file: {name}")
     return h.hexdigest()
-
 
 def enforce_scope(root: Path, scope: list[str], base_head: str) -> list[str]:
     if git(root, "rev-parse", "HEAD") != base_head:
         raise OrchestratorError("Worker changed Git HEAD; automatic processing stopped")
     files = changed(root)
-    for path in files:
-        safe_path(path)
-        if not in_scope(path, scope):
-            raise OrchestratorError(f"Out-of-scope edit: {path}")
-        file = root / path
-        if file.is_symlink() or not file.resolve().is_relative_to(root.resolve()):
-            raise OrchestratorError(f"Symlink/escaped edit: {path}")
+    for name in files:
+        safe_path(name)
+        if not in_scope(name, scope):
+            raise OrchestratorError(f"Out-of-scope edit: {name}")
+        path = root / name
+        if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
+            raise OrchestratorError(f"Symlink/escaped edit: {name}")
     return files
-
 
 def commit(root: Path, message: str) -> str:
     if changed(root):
         git(root, "add", "--all", "--", ".")
-        expected_tree = git(root, "write-tree")
+        expected = git(root, "write-tree")
         git(root, "-c", "user.name=Codex Orchestrator", "-c", "user.email=codex-orchestrator@localhost",
             "-c", "commit.gpgsign=false", "commit", "-m", message)
-        if git(root, "rev-parse", "HEAD^{tree}") != expected_tree or changed(root):
+        if git(root, "rev-parse", "HEAD^{tree}") != expected or changed(root):
             raise OrchestratorError("Commit hooks changed reviewed source; approval rejected")
     return git(root, "rev-parse", "HEAD")
 
+def diff_bytes(root: Path, base: str, head="HEAD") -> bytes:
+    return command(["git", "diff", "--binary", "--no-ext-diff", "--no-renames", base, head], root)
 
-def load_config(root: Path) -> dict:
-    try:
-        raw = tomllib.loads((root / "orchestrator.toml").read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise OrchestratorError(f"Invalid orchestrator.toml: {exc}") from exc
-    allowed = {"version", "models", "checks", "runtime"}
-    if set(raw) - allowed or raw.get("version") != 1:
-        raise OrchestratorError("Unknown config fields/version")
-    cfg = {"models": json.loads(json.dumps(DEFAULT_MODELS)), "checks": raw.get("checks", {}),
-           "runtime": {"command": ["codex"], "worktree_root": "", "attempts_per_tier": 2, "max_calls": 40,
-                       "max_tasks": 64, "max_global_rounds": 2,
-                       "model_timeout": 900, "check_timeout": 300}}
-    if not isinstance(raw.get("models", {}), dict):
-        raise OrchestratorError("models must be a table")
-    for role, settings in raw.get("models", {}).items():
-        if role not in cfg["models"] or not isinstance(settings, dict) or set(settings) - {"model", "effort", "review_effort"}:
-            raise OrchestratorError(f"Invalid model configuration: {role}")
-        cfg["models"][role].update(settings)
-    for role, settings in cfg["models"].items():
-        if not isinstance(settings["model"], str) or not settings["model"].strip():
-            raise OrchestratorError(f"Empty model: {role}")
-        for key in ("effort", "review_effort"):
-            if settings[key] not in ("none", "low", "medium", "high", "xhigh", "max"):
-                raise OrchestratorError(f"Unsupported {role}.{key}")
-    runtime = raw.get("runtime", {})
-    if not isinstance(runtime, dict) or set(runtime) - set(cfg["runtime"]):
-        raise OrchestratorError("Unknown runtime configuration")
-    cfg["runtime"].update(runtime)
-    for key, value in cfg["runtime"].items():
-        if key not in ("command", "worktree_root") and (type(value) is not int or value < 1 or value > 100000):
-            raise OrchestratorError(f"Invalid runtime.{key}")
-    if not isinstance(cfg["runtime"]["worktree_root"], str) or "\0" in cfg["runtime"]["worktree_root"]:
-        raise OrchestratorError("runtime.worktree_root must be a path string")
-    if not isinstance(cfg["checks"], dict) or not cfg["checks"]:
-        raise OrchestratorError("Configure at least one real check in [checks]")
-    arrays = {"runtime.command": cfg["runtime"]["command"], **cfg["checks"]}
-    for key, value in arrays.items():
-        if not isinstance(value, list) or not value or any(not isinstance(x, str) or not x or "\0" in x for x in value):
-            raise OrchestratorError(f"{key} must be an argv array, not a shell string")
-    return cfg
-
-
-def run_process(argv: list[str], cwd: Path, stdout: Path, stderr: Path,
-                timeout: int, stdin: str | None = None, env: dict | None = None) -> int:
-    """Log to files, not RAM; terminate the process group on timeout/interruption."""
-    stdout.parent.mkdir(parents=True, exist_ok=True)
-    with stdout.open("wb") as out, stderr.open("wb") as err:
-        try:
-            process = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
-                                       stdout=out, stderr=err, env=env, start_new_session=os.name != "nt")
-        except OSError as exc:
-            raise OrchestratorError(f"Cannot start {argv[0]}: {exc}") from exc
-        try:
-            process.communicate(stdin.encode() if stdin is not None else None, timeout=timeout)
-        except (subprocess.TimeoutExpired, KeyboardInterrupt):
-            if os.name == "nt":
-                process.kill()
-            else:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            process.wait()
-            raise
-        return process.returncode
-
+def tracked(root: Path) -> list[str]:
+    return [x.decode() for x in command(["git", "ls-files", "-z"], root).split(b"\0") if x]
 
 def argv_expand(argv: list[str]) -> list[str]:
     return [sys.executable if item == "{python}" else item for item in argv]
 
-
-def tail(path: Path, limit: int = 2000) -> str:
+def tail(path: Path, limit=1800) -> str:
+    if not path.exists():
+        return ""
     with path.open("rb") as stream:
         stream.seek(0, 2)
         stream.seek(max(0, stream.tell() - limit))
         return stream.read().decode("utf-8", errors="replace")
+
+def run_process(argv: list[str], cwd: Path, stdout: Path, stderr: Path,
+                timeout: int, stdin: str | None = None, env: dict | None = None,
+                observer=None, cancel=None, max_log_bytes=16777216) -> int:
+    """Observe JSONL incrementally; kill the process group on timeout or a gate failure."""
+    stdout.parent.mkdir(parents=True, exist_ok=True)
+    with stdout.open("wb") as out, stderr.open("wb") as err, tempfile.TemporaryFile() as inp:
+        if stdin is not None:
+            inp.write(stdin.encode())
+            inp.seek(0)
+        try:
+            process = subprocess.Popen(argv, cwd=cwd, stdin=inp, stdout=out, stderr=err,
+                                       env=env, start_new_session=os.name != "nt")
+        except OSError as exc:
+            raise OrchestratorError(f"Cannot start {argv[0]}: {exc}") from exc
+        start = time.monotonic()
+        try:
+            while True:
+                if observer:
+                    observer()
+                if cancel is not None and cancel.is_set():
+                    raise OrchestratorError("Execution cancelled by another failing task")
+                if stdout.stat().st_size + stderr.stat().st_size > max_log_bytes:
+                    raise OrchestratorError("Process log budget exceeded")
+                result = process.poll()
+                if result is not None:
+                    if observer:
+                        observer()
+                    return result
+                if time.monotonic() - start >= timeout:
+                    raise subprocess.TimeoutExpired(argv, timeout)
+                time.sleep(0.03)
+        except BaseException:
+            if process.poll() is None:
+                if os.name == "nt":
+                    process.kill()
+                else:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                process.wait()
+            raise

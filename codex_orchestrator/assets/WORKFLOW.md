@@ -1,109 +1,124 @@
-# Managed workflow reference
+# Managed workflow v2
 
-## Plan contract
-
-All fields below are required. Unknown fields are rejected.
+## Required plan
 
 ```json
 {
-  "version": 1,
-  "objective": "Implement the requested behavior",
-  "acceptance": ["The integrated behavior matches the specification"],
-  "integration_checks": ["unit"],
+  "version": 2,
+  "objective": "Implement the specified behavior",
+  "acceptance": ["The assembled feature meets the specification"],
+  "integration_checks": ["e2e"],
+  "checkpoint_checks": ["smoke"],
   "tasks": [{
-    "id": "T1",
-    "tier": "luna",
-    "objective": "Implement a bounded change",
-    "scope": ["src/component.py", "tests/test_component.py"],
-    "acceptance": ["State an observable, verifiable behavior"],
-    "checks": ["unit"],
-    "depends_on": []
+    "id": "T1", "tier": "luna", "objective": "Implement a bounded behavior",
+    "scope": ["src/feature.py"], "reads": ["src/contract.py"],
+    "acceptance": ["Invalid input is rejected without side effects"],
+    "checks": ["acceptance"], "depends_on": [], "risk_tags": [],
+    "test_contract": {
+      "files": ["tests/acceptance/test_feature.py"],
+      "cases": [{"criterion": "Invalid input is rejected without side effects",
+                 "check": "acceptance", "baseline": "fail",
+                 "rationale": "Known counterexample on the baseline commit"}]
+    },
+    "adversarial_checks": []
   }]
 }
 ```
 
-Use `luna`, `terra`, or `sol` for tier. `astra` is reserved for review/global
-validation, not automatic implementation. IDs use letters, digits, `.`, `_`, `-`;
-`global` is reserved. No duplicate IDs, unknown dependencies or cycles.
+All fields are required; unknown fields are rejected. `tier` is `luna`, `terra`
+or `sol`; Astra is not an automatic implementer. `global`, `contract`, `repair-*`
+are controller-reserved ids. Dependencies must exist and form an acyclic graph.
+Scope/read paths are exact files or directory prefixes ending `/`; no globs,
+absolute paths, parent traversal or symlink escapes. Core acceptance files must
+be committed regular files outside every task's write scope.
 
-Scope uses exact files or a directory prefix ending in `/`; no globs, `..`,
-absolute paths or symlink escapes. `.git`, `.codex`, `.agents`, and
-`orchestrator.toml` are protected. Changing the harness itself is a separate,
-explicitly authorized maintenance task outside a managed run.
+## Eight executable controls
 
-Checks are argv arrays in project configuration, not shell snippets supplied by
-an agent. They run in the isolated worktree. Commands must not modify tracked or
-non-ignored source. Configure formatters in check mode, not write mode.
+1. **Risk floor.** Built-in rules inspect task text, scoped/read paths, actual source
+   and the diff (including removed lines). Auth, payments, migrations, concurrency,
+   secrets, infrastructure, declared tags and additive project glob rules force
+   Sol/Astra and critical verification. Floors persist through delegation/repair.
+   Unknown/binary/large scoped content is treated conservatively. Regex/policy is
+   not a proof of semantic risk detection; add project-specific critical paths.
+2. **Independent oracle.** Acceptance criteria map to checks and baseline outcomes.
+   The controller hashes core tests, explicit check scripts, configuration and
+   instructions, runs the baseline and asks Astra to review the test contract in a
+   fresh read-only invocation. Checks run as real processes, not model assertions.
+   Every later phase verifies sealed files. Executors may add supplemental tests,
+   but cannot modify or replace the preapproved core oracle.
+3. **Checkpoints.** Run configured partial-integration checks every N integrated
+   tasks, after each critical task and at the end of a partial batch. Failures stop
+   further dependents. Astra diagnoses only a failure; targeted repairs are finite
+   and inherit the original task's attempt and token accounting.
+4. **Worktrees.** Integration and each task have separate worktrees. Ready tasks
+   may run concurrently only when declared write/read scopes do not overlap.
+   Critical tasks run alone. Results integrate in stable plan order. A changed
+   base creates another candidate, applies the patch, reruns checks and review;
+   conflicting patches block with both worktrees preserved. No force reset, push,
+   user-branch merge or automatic conflict resolution. Persisted integration intents
+   recover completed fast-forwards without replaying them.
+5. **Handoff.** Store bounded factual attempts/outcomes, unresolved issues and patch/
+   log references. No private model reasoning or transcript propagation. A stronger
+   executor inspects the preserved patch. Full local artifacts remain available.
+6. **Budgets.** Atomic per-call reservations cover run, task/subtree and model token
+   ceilings; monetary ceilings require user-configured prices for all roles.
+   Attempts/calls/tasks/repair rounds/timeouts/log/prompt sizes are finite. Children
+   and repairs charge their ancestors. Missing/invalid telemetry retains reserved
+   cost and blocks further inference. Resume does not reset limits.
+7. **Correlated review.** Review contexts are blind to implementation narratives.
+   Critical changes additionally require a separate adversarial invocation, real
+   negative checks and an external human's Ed25519 approval over exact evidence.
+   Context isolation does NOT imply statistical independence. Private signing keys
+   must remain unavailable to workers; local state is not a hostile multi-user
+   security boundary.
+8. **Review capsules.** Bind spec, risk, oracle, source/read hashes, base/tree/commit,
+   model, check logs and actual review responses. Reuse only fresh evidence. Changed
+   bases trigger new review; subsequent edits trigger stale-capsule refresh. Global
+   Astra receives compact references and integration evidence. No guarantee is made
+   about a model never rereading a diff internally.
 
-## Per-task state machine
+## States and loops
 
-`pending -> implementing -> testing -> reviewing -> approved`
+Run: `pending → running → approved | awaiting_human | blocked | interrupted`.
+Task: `pending → implementing → testing → reviewing → local_approved → integrated`.
+Delegation: `implementing → delegated → child flows → pending/integration`.
+A check/review rejection returns to the same executor; exhaustion promotes to the
+next tier and its reviewer. Sol exhaustion stops for replanning. No author approves
+its own implementation. Read-only reviewers do not fix the code.
 
-A failed check returns directly to implementation without a reviewer call.
-A review requesting changes returns to the same executor. After the configured
-attempt limit the next tier takes over; the next tier's reviewer must review.
-A blocked implementation escalates immediately. An unavailable CLI/model,
-malformed output, unauthorized edit, stale proof or blocked review stops the run.
-Sol exhausting its budget requires replanning; Astra does not author and approve
-its own patch.
+A parent may delegate once, before edits, to lower-tier children inside the reviewed
+scope. Child criteria/checks are subsets of the immutable parent contract. Children
+execute sequentially inside a parent flow; independent top-level tasks may run in
+parallel. Tasks launched in one batch must not need another batch member's output.
 
-Rejections and failed checks retain the diff; the next attempt inspects and fixes
-it. The controller does not silently reset, discard, or overwrite that work.
+## Observed consumption versus a hard invoice cap
 
-## Optional delegation
+`codex exec` emits usage after a turn. The optional trusted `PostModelRequest` hook
+can give earlier request telemetry but cannot veto model requests. The controller
+polls usage and cancels the local process on a ceiling; a request already sent can
+still be billed and reported late. Parallel in-flight work can also overshoot its
+reservation. `mode = "observed"` is admission control + a circuit breaker, **not a
+hard monetary cap**. `mode = "strict"` refuses inference because the CLI adapter
+cannot establish a hard provider-enforced cap. This is deliberate fail-closed
+behavior, not a silent approximation. Request and turn telemetry are not added
+together; cached input and reasoning output are not double-counted.
 
-A Terra/Sol implementation can return `status: "delegate"` BEFORE changing source,
-with `children` following the task contract except `depends_on`. Each child is a
-lower tier, inherits a subset of the parent's scope and uses configured checks.
-Child ids are namespaced under the parent's id. Children run sequentially in the
-same isolated run worktree. This version deliberately avoids parallel writers.
-A parent may delegate once, then receives child proofs and implements integration.
-Luna cannot delegate. Integration repair tasks cannot delegate again.
+## Hooks and recovery
 
-This is a hierarchy of responsibility, not a mandatory forwarding chain:
-Astra's initial plan can target Luna directly. Sol can propose Luna directly.
-A Terra child may propose Luna; this gives the optional Sol -> Terra -> Luna tree.
-Lower-tier outputs do not automatically prove integration correctness.
+SessionStart supplies an enrollment id. Stop gates only that session, reports
+blocked/awaiting-human states truthfully and prevents unbounded continuation.
+Managed processes skip lifecycle Stop gates; controller transitions remain required
+without hooks. PostModelRequest writes only compact usage, never transcripts and
+never calls another model. Do not use SubagentStop for these independent CLI
+processes. Review/trust hooks explicitly in Codex; installation cannot grant trust.
 
-## Reviews and final validation
+State/artifacts live in the Git common directory under `codex-orchestrator/runs`;
+worktrees live outside the checkout/Git metadata. The source checkout must be clean.
+`resume` checks plan/worktree integrity and preserves budgets. An unresolved usage
+record requires operator investigation; there is no blind budget-reset override.
 
-Reviews use a fresh Codex invocation and a read-only sandbox. The input contains
-the task contract, baseline, snapshot fingerprint, real check logs and child
-proof references. It does not contain the implementation conversation transcript.
-A review must cover every acceptance criterion exactly once and match the current
-snapshot. An approval with findings or failed criteria is invalid.
-
-The controller makes local checkpoint commits after valid reviews. Git commit
-hooks are honored; if a hook changes the reviewed tree or leaves edits, approval
-is rejected. Checkpoints use the explicit Codex Orchestrator identity and are
-unsigned. Nothing is pushed or merged into the user's branch automatically.
-
-After all tasks, all named task checks plus integration checks run on the assembled
-code. Astra receives a consolidated contract and artifact references. If checks
-fail, Astra may diagnose and return targeted findings, but may NOT approve.
-Findings naming an existing task create bounded repair tasks within that scope;
-findings needing new/global scope stop for replanning. Each repair follows the
-same executor/reviewer route. Final checks and Astra validation repeat within the
-global-round budget. No post-failure changes are treated as already approved.
-
-## Hooks and persistence
-
-SessionStart supplies a compact session id. Stop checks only a session enrolled
-with `--session-id`; unrelated sessions are untouched. A pending run can request
-one continuation; `stop_hook_active` prevents an unbounded loop. A blocked or
-interrupted run may end with an explicit failure report. Managed child processes
-skip these hooks because the controller owns their phase gates.
-
-There is intentionally no SubagentStop review launcher: `codex exec` processes
-are not native `spawn_agent` threads. A hook never starts a model, parses private
-transcripts, or waits for a reviewer before allowing an implementer to finish.
-
-State/artifacts live under the Git common directory in `codex-orchestrator/runs`.
-JSON state is atomically replaced; an OS file lock prevents concurrent controllers.
-Each run has its own branch/worktree, recorded model IDs/efforts, request/response
-artifacts, JSONL CLI events, check logs and a history of review results.
-
-`status` aggregates reported token fields by model role and stage. Cached input
-is part of input, not extra input. Reasoning is reported separately as supplied by
-the CLI; do not add it again to output. Missing usage is explicitly counted.
-No synthetic quality score, cost estimate or promised savings is generated.
+For critical work, `approval-request RUN_ID` produces canonical bytes. An external
+reviewer signs with an Ed25519 key using OpenSSL 3+. `approve` verifies against a
+public-key allowlist pinned when the run started. Wrong signer, wrong run, altered
+code/config/evidence and replay of stale statements are rejected. The controller
+never generates or consumes private keys.

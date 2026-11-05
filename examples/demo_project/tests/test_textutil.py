@@ -1,17 +1,20 @@
 import unittest
-from textutil import normalize_name
+from textutil import normalize_label
 
 
-class NormalizeNameTests(unittest.TestCase):
+class LabelContract(unittest.TestCase):
     def test_whitespace(self):
-        self.assertEqual(normalize_name("  Ada\t  Lovelace\n"), "Ada Lovelace")
+        self.assertEqual(normalize_label("  Alpha\t Beta\n"), "Alpha Beta")
+        self.assertEqual(normalize_label(""), "")
+        self.assertEqual(normalize_label("   "), "")
 
-    def test_empty(self):
-        self.assertEqual(normalize_name(""), "")
+    def test_unicode_and_case_are_preserved(self):
+        self.assertEqual(normalize_label("  Ação   Útil  "), "Ação Útil")
 
-    def test_invalid_type(self):
-        with self.assertRaises(TypeError):
-            normalize_name(None)
+    def test_type_boundary(self):
+        for value in (None, 1, [], b"text"):
+            with self.subTest(value=value), self.assertRaises(TypeError):
+                normalize_label(value)
 
 
 if __name__ == "__main__":

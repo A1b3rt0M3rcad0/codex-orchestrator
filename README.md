@@ -1,412 +1,441 @@
 # Codex Orchestrator
 
-**Skill, hooks e controlador local para implementar com Luna/Terra/Sol, revisar no nível seguinte e validar o conjunto com Astra.**
+**Skill, hooks e controlador determinístico para implementar com Luna/Terra/Sol, revisar no nível seguinte e validar a entrega com Astra.**
 
-O encaminhamento é código Python, não uma conversa entre quatro modelos. Uma tarefa simples vai diretamente ao Luna. Terra revisa essa tarefa; Sol não é chamado apenas para repassá-la. Astra recebe a entrega integrada, não os históricos completos dos executores.
+Versão **0.2.0 — Q1 hardening**. Python 3.11+, biblioteca padrão no runtime. O roteamento é código, não uma sequência de modelos encaminhando mensagens. Uma tarefa Luna não atravessa Sol e Terra antes de começar.
 
-> **Estado:** versão inicial `0.1.0`. Os testes automatizados usam um CLI simulado com subprocessos reais, Git, worktrees, checks e persistência. Isso não equivale a um teste com os modelos reais. O uso real exige Codex instalado/autenticado e acesso aos modelos configurados. Nenhuma equivalência de qualidade ou porcentagem de economia é prometida.
+> **Validação:** a suíte executa processos, Git, worktrees, checks, persistência e assinaturas criptográficas reais; somente o serviço Codex é substituído por um CLI de teste. Isso não é um benchmark de qualidade nem um smoke test com modelos autenticados. Veja [VALIDATION.md](docs/VALIDATION.md).
 
 ## Índice
 
-- [Arquitetura](#arquitetura)
+- [Arquitetura e oito controles](#arquitetura-e-oito-controles)
 - [Instalação](#instalação)
-- [Configuração dos modelos e testes](#configuração-dos-modelos-e-testes)
+- [Configuração](#configuração)
+- [Plano e contrato de testes](#plano-e-contrato-de-testes)
 - [Uso pela skill](#uso-pela-skill)
-- [Contrato do plano](#contrato-do-plano)
-- [Fluxos completos](#fluxos-completos)
-- [Hooks: o que fazem e o que não fazem](#hooks-o-que-fazem-e-o-que-não-fazem)
-- [Estado, retomada e evidências](#estado-retomada-e-evidências)
-- [Tokens e eficiência](#tokens-e-eficiência)
-- [Demonstração e testes](#demonstração-e-testes)
-- [Limites e compatibilidade](#limites-e-compatibilidade)
-- [Estrutura e referências](#estrutura-e-referências)
+- [Fluxos ponta a ponta](#fluxos-ponta-a-ponta)
+- [Paralelismo e integração](#paralelismo-e-integração)
+- [Orçamentos: o que é garantido](#orçamentos-o-que-é-garantido)
+- [Aprovação humana assinada](#aprovação-humana-assinada)
+- [Hooks, evidências e recuperação](#hooks-evidências-e-recuperação)
+- [Migração da 0.1](#migração-da-01)
+- [Testes e demonstração](#testes-e-demonstração)
+- [Limites explícitos](#limites-explícitos)
+- [Estrutura e documentação oficial](#estrutura-e-documentação-oficial)
 
-## Arquitetura
+## Arquitetura e oito controles
 
-| Responsabilidade | Componente |
-|---|---|
-| Investigar requisitos, planejar e classificar tarefas | Astra, na sessão principal com a skill |
-| Resolver dependências, despachar, limitar tentativas e salvar estado | Controlador Python determinístico |
-| Implementar uma tarefa simples | Luna |
-| Revisar a implementação do Luna | Terra, em uma nova invocação |
-| Implementar uma tarefa intermediária | Terra |
-| Revisar a implementação do Terra | Sol, em uma nova invocação |
-| Implementar uma tarefa complexa | Sol |
-| Revisar a implementação do Sol | Astra, em uma nova invocação |
-| Validar integração, comportamento global e critérios finais | Astra, após os checks consolidados |
-
-```mermaid
-flowchart TD
-    A[Astra: Spec e plano] --> R[Controlador: despacho direto]
-    R --> L[Luna implementa]
-    R --> T[Terra implementa]
-    R --> S[Sol implementa]
-    L --> LC[Checks reais]
-    T --> TC[Checks reais]
-    S --> SC[Checks reais]
-    LC --> TR[Terra revisa]
-    TC --> SR[Sol revisa]
-    SC --> AR[Astra revisa]
-    TR --> I[Integração no worktree isolado]
-    SR --> I
-    AR --> I
-    I --> C[Todos os checks locais + integração]
-    C --> G[Astra: validação global]
-    G --> D[Gate aprovado: branch pronta para avaliação]
+```text
+Astra: plano + revisão prévia do contrato de testes
+                         │
+                Controlador determinístico
+                         │
+           risco + dependências + orçamento
+             ┌───────────┼───────────┐
+             ▼           ▼           ▼
+           Luna        Terra        Sol
+             │           │           │
+        checks reais  checks reais  checks reais
+             │           │           │
+        Terra revisa  Sol revisa   Astra revisa
+             └───────────┼───────────┘
+                         │
+             integração ordenada por tarefa
+             + checkpoints intermediários
+                         │
+             Astra valida o conjunto final
+                         │
+          alteração crítica? revisão adversarial,
+          checks negativos e assinatura externa
+                         │
+              gate → branch/commit aprovado
 ```
 
-A hierarquia é uma **política de responsabilidades**, não um benchmark de capacidade universal dos modelos. A versão inicial executa tarefas sequencialmente em uma worktree por run: não há escritores concorrentes no mesmo checkout.
+| Ponto auditado | Controle executável na v0.2 |
+|---|---|
+| 1. Classificação errada | Pisos de risco por domínio, caminhos, código e diff; reavaliação após edição e herança em filhos/reparos. |
+| 2. Testes feitos para passar | Contrato de aceite anterior à implementação, checks reais de baseline, revisão prévia pelo Astra e arquivos de teste selados. |
+| 3. Integração tardia | Checkpoints a cada N tarefas, após tarefas críticas e no fim de lote parcial; dependentes não avançam quando falham. |
+| 4. Escritores concorrentes | Worktree por tarefa, conflitos de leitura/escrita serializados, ordem estável de integração e nova revisão quando a base muda. |
+| 5. Escalonamento sem contexto | Handoff factual limitado, com tentativas, falhas, patch e referências às evidências; sem transcrições. |
+| 6. Consumo sem teto | Reservas atômicas, limites de tentativas/chamadas/tokens/custo, cobrança por subárvore e interrupção por consumo observado. |
+| 7. Pontos cegos correlacionados | Revisão sem narrativa do executor; para mudanças críticas, revisão adversarial separada, checks negativos e aprovação externa assinada. |
+| 8. Revisão redundante | Cápsulas vinculadas à spec, arquivos lidos/alterados, base, snapshot, modelo, logs e resposta; reuso somente enquanto válidas. |
 
-### Por que usar `codex exec`, se existem subagentes nativos?
-
-Porque a transição `implementação -> testes -> revisor correto` precisa ser determinística e não depender de uma nova decisão do Astra. O controlador inicia sessões independentes de `codex exec`, configura modelo/esforço explicitamente, solicita saída estruturada e aplica os gates.
-
-Os perfis nativos instalados em `.codex/agents/` são auxiliares para uso manual. **Invocar um desses subagentes manualmente não cria uma aprovação no controlador.** O fluxo gerenciado usa `run`; não mistura execuções próprias com threads nativas.
+**Dois limites não são escondidos:** modelos da mesma família não se tornam estatisticamente independentes por rodarem em contextos separados. E limites observados do CLI não são um teto absoluto da fatura do provedor. Há controles compensatórios e comportamento fail-closed, detalhados abaixo.
 
 ## Instalação
 
-### Requisitos
-
-Python **3.11+**, Git, Codex CLI instalado e autenticado, acesso aos modelos desejados e um projeto Git com ao menos um commit. Linux, macOS e WSL são os ambientes-alvo. A instalação nativa no Windows é recusada nesta versão; use WSL.
-
-O pacote não possui dependências Python de runtime. A instalação via `pip` utiliza setuptools para construir o pacote. As chamadas ao Codex continuam sujeitas ao plano/credenciais e às políticas da sua conta.
+Requisitos: Linux/macOS ou WSL, Python **3.11+**, Git e Codex CLI instalado/autenticado. **OpenSSL 3+ com Ed25519** é necessário para aprovações humanas assinadas. O ambiente da CI também o utiliza. Windows nativo não foi validado para instalação dos hooks.
 
 ```bash
-# Uma vez: instale o pacote em um ambiente Python persistente.
 python3 -m venv ~/.venvs/codex-orchestrator
 source ~/.venvs/codex-orchestrator/bin/activate
-python -m pip install "git+https://github.com/A1b3rt0M3rcad0/codex-orchestrator.git"
+python -m pip install \
+  "git+https://github.com/A1b3rt0M3rcad0/codex-orchestrator.git"
 
-# Instale a skill, os perfis auxiliares e os hooks no projeto consumidor.
 codex-orchestrator --repo /caminho/do/projeto install
 ```
 
-O instalador adiciona:
+O instalador adiciona a skill em `.agents/skills/codex-orchestrator`, um perfil em `.codex/config.toml` e handlers próprios em `.codex/hooks.json`. Preserva configurações, handlers e instruções existentes. Arquivos de skill editados manualmente não são sobrescritos. Não grava credenciais, não autoriza hooks e não executa modelos.
 
-```text
-seu-projeto/
-├── .agents/skills/codex-orchestrator/
-│   ├── SKILL.md
-│   └── references/workflow.md
-├── .codex/
-│   ├── agents/co-*.toml
-│   ├── config.toml                 # acrescenta um perfil; preserva o padrão existente
-│   ├── hooks.json                 # preserva os outros hooks
-│   └── orchestrator-install.json
-├── AGENTS.md                      # acrescenta um bloco delimitado
-└── orchestrator.toml              # configuração autoritativa do controlador
+Na sessão do Codex, abra **`/hooks`**, revise os comandos e conceda confiança explicitamente. Os gates do controlador continuam obrigatórios mesmo sem hooks.
+
+## Configuração
+
+Edite `orchestrator.toml`. O instalador gera `version = 2`, modelos e limites, mas deixa os checks sem comandos ativos: **não existe teste fictício que sempre passa**.
+
+```toml
+version = 2
+
+[runtime]
+command = ["codex"]
+parallel_workers = 1
+checkpoint_every = 2
+checkpoint_repairs = 1
+max_calls = 80
+max_tasks = 64
+max_global_rounds = 2
+model_timeout = 900
+check_timeout = 300
+
+[attempts]
+luna = 2
+terra = 2
+sol = 2
+
+[budgets]
+mode = "observed"
+run_tokens = 2000000
+task_tokens = 500000
+call_tokens = 100000
+task_calls = 24
+
+[policy]
+minimum_tier = "luna"
+extra_patterns = ["src/finance/*", "src/tenant_boundary/*"]
+
+[verification]
+require_human = "critical"
+trusted_signers = ""
+
+[checks]
+# Substitua pelos comandos reais do seu projeto:
+# acceptance = ["{python}", "-m", "unittest", "discover", "-s", "tests/acceptance", "-v"]
+# smoke = ["npm", "run", "test:integration"]
+# e2e = ["npm", "run", "test:e2e"]
+# adversarial = ["npm", "run", "test:negative"]
 ```
 
-Não substitui as regras já existentes no `AGENTS.md`, não troca o modelo padrão do seu Codex e não grava credenciais. Reinstalar é idempotente. Arquivos de skill/agentes modificados manualmente são preservados por recusa explícita de sobrescrita.
+`{python}` significa o interpretador do controlador. Comandos são arrays de argumentos, sem shell implícito. Formatadores precisam estar em modo check. Dependências, bancos de teste e serviços devem existir nas worktrees; o controlador não instala nem inventa esses serviços. Para executar em paralelo, os próprios checks precisam isolar bancos, portas e arquivos externos — worktrees não isolam recursos fora do checkout.
 
-O comando dos hooks contém o caminho absoluto do Python usado na instalação. Não apague/mova esse ambiente; reinstale no projeto ao mudar de ambiente Python.
-
-**Instalar somente o `SKILL.md` não basta:** a skill chama o controlador, que precisa estar instalado. Os hooks também precisam de instalação e confiança locais.
-
-## Configuração dos modelos e testes
-
-### Modelos
-
-Os nomes Astra, Sol, Terra e Luna representam os papéis. Os IDs padrão, conferidos na documentação oficial em **04/11/2026**, são:
+Os papéis configuráveis padrão são:
 
 | Papel | Model ID | Implementação | Revisão |
 |---|---|---|---|
-| Astra | `gpt-6-astra` | planejamento no perfil `max` | `max` |
+| Astra | `gpt-6-astra` | reservado ao planejamento externo | `max` |
 | Sol | `gpt-6.1-sol` | `low` | `high` |
 | Terra | `gpt-6.1-terra` | `medium` | `high` |
-| Luna | `gpt-6-luna` | `max` | não revisa |
+| Luna | `gpt-6-luna` | `max` | não é revisor |
 
-Luna foi mantido em `max` para reproduzir a configuração discutida. Isso **não** significa que `max` seja necessário para tarefas mecânicas. Ajuste e meça. `Ultra` e `Light` não são valores gravados literalmente na configuração.
+Cada `[models.PAPEL]` permite `model`, `effort`, `review_effort` e `family`. Não há fallback silencioso. Disponibilidade e esforço suportado dependem da conta/versão do Codex; `doctor` verifica flags locais, não acesso remoto. O metadado `family` informa auditoria; renomeá-lo não prova independência nem remove a assinatura exigida para mudanças críticas.
 
-Exemplo de ajuste em `orchestrator.toml`:
+### Política de risco
 
-```toml
-[models.luna]
-model = "gpt-6-luna"
-effort = "low"
-review_effort = "max"
+Auth/autorização/tenancy, pagamentos, migrations, concorrência, segredos e infraestrutura possuem detectores embutidos. A análise usa metadados, caminhos reais sob os escopos, conteúdo e diff, inclusive exclusões. Tags declaradas, regras adicionais e conteúdo binário/grande também podem elevar a classificação. O piso crítico é **Sol implementa → Astra revisa**, com verificação adversarial e assinatura externa.
+
+Regras são monotônicas: o plano não desativa detectores e filhos não descartam o risco herdado. Uma descoberta após edição preserva o patch e exige reavaliação pelo executor superior. Regras de caminhos específicas do projeto devem complementar os detectores; nenhuma heurística lexical garante descobrir todo risco semântico.
+
+## Plano e contrato de testes
+
+Antes da implementação, o Astra/autor da Spec define critérios observáveis e **testes principais comprometidos no Git**. O executor pode acrescentar testes suplementares em seu escopo, mas não alterar os testes de aceite selados. O controlador executa o baseline e chama Astra, em contexto read-only, para revisar o contrato de testes antes de abrir qualquer tarefa.
+
+Exemplo completo: [examples/demo.plan.json](examples/demo.plan.json).
+
+```json
+{
+  "version": 2,
+  "objective": "Normalizar rótulos conforme o contrato",
+  "acceptance": ["A normalização atende aos casos de aceite"],
+  "integration_checks": ["unit"],
+  "checkpoint_checks": ["unit"],
+  "tasks": [{
+    "id": "TEXT-1",
+    "tier": "luna",
+    "objective": "Implementar normalize_label",
+    "scope": ["textutil.py"],
+    "reads": [],
+    "acceptance": ["Espaços redundantes são normalizados", "Valores não textuais geram TypeError"],
+    "checks": ["unit"],
+    "depends_on": [],
+    "risk_tags": [],
+    "test_contract": {
+      "files": ["tests/test_textutil.py"],
+      "cases": [
+        {"criterion": "Espaços redundantes são normalizados", "check": "unit", "baseline": "fail", "rationale": "A função está incompleta no baseline"},
+        {"criterion": "Valores não textuais geram TypeError", "check": "unit", "baseline": "fail", "rationale": "O contrato de tipos ainda não foi implementado"}
+      ]
+    },
+    "adversarial_checks": []
+  }]
+}
 ```
 
-O runtime sempre usa `orchestrator.toml`. Os perfis nativos auxiliares são exemplos estáticos gerados na instalação; alterá-los não muda o runtime. Não há fallback silencioso para outro modelo quando um ID não está disponível.
+Cada critério precisa de mapeamento a pelo menos um check. `baseline` é `pass` ou `fail`, com justificativa; falha esperada deve ser um contraexemplo conhecido, não runner quebrado. Todos os campos são obrigatórios. Critérios e checks de filhos são subconjuntos do contrato já revisado: um executor não pode inventar um novo oráculo permissivo.
 
-### Checks reais: etapa obrigatória
+`scope` é permissão de escrita; `reads` declara dependências relevantes ao scheduler e ao reuso de revisões. Use arquivos exatos ou prefixos terminados em `/`, nunca globs. Arquivos de controle e todos os testes principais são protegidos contra escrita, inclusive por outras tarefas.
 
-O instalador **não** inventa um comando que sempre passe. Configure testes apropriados ao seu projeto:
+**Testes independentes não equivalem a testes perfeitos.** O controle garante proveniência temporal, imutabilidade e revisão do contrato. A suficiência dos casos exige julgamento; mudanças críticas mantêm o gate humano.
 
-```toml
-[checks]
-unit = ["{python}", "-m", "unittest", "discover", "-s", "tests", "-v"]
-# Exemplos alternativos, conforme o projeto:
-# unit = ["go", "test", "./..."]
-# typecheck = ["npm", "run", "typecheck"]
-# integration = ["npm", "run", "test:integration"]
-```
-
-Cada comando é um **array de argumentos**, executado sem shell. `{python}` usa o interpretador do controlador. Dependências, serviços e arquivos de ambiente precisam existir na worktree ou estar acessíveis pelo ambiente de execução; não são copiados/instalados automaticamente.
-
-Checks devem ser não mutantes. Use `ruff check`, não correções automáticas; `prettier --check`, não `--write`. Código alterado por um check invalida a evidência.
+## Uso pela skill
 
 ```bash
 cd /caminho/do/projeto
 codex-orchestrator doctor
+codex-orchestrator validate plano.json
+# Revise e faça commit da configuração, dos testes principais e do plano.
 codex --profile codex-orchestrator
 ```
 
-Na sessão do Codex, abra **`/hooks`**, revise e confie nos hooks do projeto. O instalador não concede confiança por você nem usa flags de bypass. O `doctor` verifica configuração e flags locais, mas não faz inferência e não comprova autenticação, confiança dos hooks ou disponibilidade dos modelos.
-
-Ao iniciar o controlador de dentro do Codex, autorize o comando conforme a política local: ele precisa criar branches/worktrees e escrever metadados Git e artefatos. Ele não contorna a sandbox da sessão principal. Em um terminal normal, valem as permissões do usuário.
-
-Commit as alterações de configuração e o plano antes de iniciar uma execução. O controlador recusa um checkout original com alterações não commitadas; nunca faz commit de trabalho pré-existente do usuário.
-
-## Uso pela skill
-
-Na sessão principal do Codex:
+Na sessão:
 
 ```text
 $codex-orchestrator
-Implemente [objetivo]. Estude AGENTS.md e o código relevante, defina o plano,
-use Luna/Terra/Sol conforme a complexidade, execute os checks reais e as revisões
-hierárquicas e entregue a branch somente após a validação global do Astra.
+Implemente [objetivo] conforme as regras deste projeto.
+Prepare o contrato de testes antes da implementação, classifique o risco,
+use os executores adequados e conclua somente após os gates exigidos.
 ```
 
-A skill orienta o Astra a criar o plano, validá-lo e executar o controlador. Quando o hook `SessionStart` fornecer o ID da sessão, ele deve ser passado em `--session-id`; assim o hook de conclusão acompanha somente essa conversa.
-
-Também é possível usar o CLI diretamente, sem sessão interativa:
+Execução direta equivalente:
 
 ```bash
-codex-orchestrator validate path/to/plan.json
-codex-orchestrator run path/to/plan.json
-codex-orchestrator list
+codex-orchestrator run plano.json
 codex-orchestrator status RUN_ID
 codex-orchestrator gate RUN_ID
 ```
 
-Sem `--session-id`, os gates do controlador continuam ativos; apenas não há vínculo com o `Stop` de uma conversa.
+O profile principal não é usado como roteador a cada operação: o Python chama diretamente `codex exec` com o modelo/papel de cada etapa. O planejamento inicial ocorre no Codex/autor da Spec; o runtime valida e executa o plano recebido, não transforma texto livre em tarefas por conta própria.
 
-## Contrato do plano
+## Fluxos ponta a ponta
+
+### Luna
+
+```text
+Spec + testes principais → baseline → Astra revisa contrato
+→ política permite Luna → reserva orçamento → Luna implementa em sua worktree
+→ checks do contrato
+  falha: Luna recebe o diagnóstico e corrige, sem pagar revisão prematura
+→ Terra revisa em contexto novo/read-only
+  reprova: Luna corrige; esgotamento promove para Terra e revisor vira Sol
+→ cápsula local → integração ordenada
+  base diferente: aplicar em outra worktree → checks + nova revisão
+→ checkpoint quando devido → Astra global → gate
+```
+
+### Terra
+
+```text
+Contrato revisado → política/orçamento → Terra implementa
+  pode propor uma única delegação inferior, antes de editar:
+  Luna implementa em outra worktree → checks → Terra revisa → integra no pai
+→ Terra integra a própria tarefa → checks → Sol revisa
+  reprova: Terra corrige; esgotamento promove para Sol/Astra
+→ cápsula → integração ordenada + revalidação da base → checkpoints
+→ Astra global → gate
+```
+
+### Sol e mudanças críticas
+
+```text
+Contrato revisado → política/orçamento → Sol implementa
+  delegação inferior só é aceita se o piso de risco do filho permitir
+→ checks → Astra revisa
+→ se crítico: checks adversariais + nova revisão adversarial sem narrativa anterior
+→ cápsula → integração + checkpoint obrigatório
+→ Astra global
+→ se crítico: awaiting_human → revisão externa + assinatura Ed25519 verificada
+→ gate aprovado
+```
+
+Esgotamento do Sol bloqueia para replanejamento; Astra não passa a autor e aprovador do mesmo patch. Reparo global usa o mesmo escopo/oráculo, herda o orçamento e as tentativas da tarefa original. Uma descoberta que exige novo escopo interrompe o fluxo em vez de expandir silenciosamente a autorização.
+
+## Paralelismo e integração
+
+`parallel_workers = 1` é o padrão conservador. Valores de 2 a 16 habilitam tarefas de topo independentes. O scheduler respeita `depends_on`, colisões de escrita/escrita e leitura/escrita e o limite do lote até o próximo checkpoint. Tarefas críticas executam sozinhas; filhos de um mesmo pai executam sequencialmente.
+
+Cada tarefa tem branch/worktree próprias, separadas da integração. O resultado é integrado na ordem estável do plano, não na ordem de conclusão. Se a base mudou, o patch é aplicado em uma nova candidata, testado e revisado novamente. Conflitos preservam os checkouts e bloqueiam; não existe merge forçado ou resolução silenciosa por IA.
+
+`checkpoint_checks` devem validar uma implementação parcial coerente. Pode-se usar E2E nessa lista quando o ambiente permite. A suite final fica em `integration_checks`. Checks intermediários que exigem funcionalidades ainda não implementadas precisam ser definidos por marcos apropriados no plano; não desative o gate para contornar isso.
+
+## Orçamentos: o que é garantido
+
+O controlador reserva uma franquia por chamada **antes de iniciar o processo**, sob lock compartilhado, levando em conta chamadas simultâneas. Há tetos de tokens por execução, tarefa/subárvore e papel, além de chamadas, tentativas, tempo, tamanho de prompt/log e rodadas de reparo. Filhos/reparos não escapam da conta do pai.
+
+Para limites monetários, configure `run_cost_usd`/`task_cost_usd` como strings decimais e informe `[prices.astra]`, `[prices.sol]`, `[prices.terra]`, `[prices.luna]`, cada uma com `input`, `cached_input` e `output` por milhão de tokens. A configuração rejeita preços incompletos quando existe um teto financeiro. **O projeto não embute preços comerciais nem transforma consumo de assinatura em dólares.**
+
+Uso observado libera a parte não consumida da reserva. Telemetria ausente/inválida mantém a reserva e bloqueia novas chamadas. Entrada em cache já pertence à entrada; raciocínio já pertence à saída. Esses campos não são somados duas vezes. Telemetria de hooks e de fim de turno não é adicionada como se fossem consumos distintos.
+
+**Limitação material do adaptador CLI:** o provedor pode cobrar uma requisição em voo antes de o consumo ser informado. O monitor cancela o processo local quando observa excesso; esse cancelamento não desfaz faturamento remoto. Portanto:
+
+- `mode = "observed"`: tetos de admissão e disjuntor de consumo observado; não é garantia de fatura máxima.
+- `mode = "strict"`: recusa inferência, pois o adaptador CLI não comprova um teto rígido por requisição. Não degrada silenciosamente para o modo observado.
+
+`PostModelRequest` melhora a granularidade quando disponível/confiado; esse hook é diagnóstico, não uma autorização capaz de vetar requisições. O tempo de polling não elimina a janela de consumo remoto. O relatório distingue uso ausente e custo não configurado de zero.
+
+## Aprovação humana assinada
+
+Obrigatória para mudanças críticas; `require_human = "all"` também a exige nas demais. O controlador verifica uma assinatura Ed25519, mas **não cria, pede nem utiliza a chave privada**. O signatário deve revisar o diff, os testes e a proposta de aprovação em um ambiente inacessível aos executores.
+
+Prepare fora do projeto uma allowlist JSON com a chave **pública** autorizada:
 
 ```json
 {
   "version": 1,
-  "objective": "Implementar o comportamento solicitado",
-  "acceptance": ["O comportamento integrado atende à especificação"],
-  "integration_checks": ["unit"],
-  "tasks": [
-    {
-      "id": "T1",
-      "tier": "luna",
-      "objective": "Implementar uma alteração delimitada",
-      "scope": ["src/component.py", "tests/test_component.py"],
-      "acceptance": ["O componente satisfaz um comportamento verificável"],
-      "checks": ["unit"],
-      "depends_on": []
-    }
-  ]
+  "identities": {
+    "revisor@empresa": "-----BEGIN PUBLIC KEY-----\n...CHAVE PUBLICA ED25519...\n-----END PUBLIC KEY-----\n"
+  }
 }
 ```
 
-Use arquivos exatos ou diretórios terminados em `/`. Não são aceitos globs, caminhos absolutos, `..`, IDs duplicados ou dependências circulares. `.git`, `.codex`, `.agents` e `orchestrator.toml` não podem ser modificados por tarefas gerenciadas.
+Defina o caminho absoluto em `verification.trusted_signers`. O conteúdo da allowlist é fixado por hash ao iniciar a run. O placeholder acima precisa ser substituído por uma chave pública real; não é uma chave utilizável.
 
-Os critérios devem descrever **comportamento observável**, não “código bom” ou “tarefa concluída”. O revisor precisa responder a todos os critérios, e testes reprovados não podem ser convertidos em sucesso por uma resposta do modelo.
+Quando o estado for `awaiting_human`:
 
-## Fluxos completos
-
-### Luna: implementação simples
-
-```text
-Astra define a tarefa
-  -> controlador despacha diretamente ao Luna
-  -> Luna implementa
-  -> controlador executa os checks
-       falha: Luna corrige, sem chamar revisor
-  -> Terra revisa em contexto independente
-       reprova: Luna corrige e repete os checks
-       aprova: checkpoint local + evidências
-  -> quando todas as tarefas terminam: checks consolidados + Astra global
+```bash
+codex-orchestrator approval-request RUN_ID > approval.json
 ```
 
-### Terra: implementação intermediária
+No ambiente externo do signatário, depois de revisar o payload e as evidências:
 
-```text
-Astra define a tarefa -> Terra implementa -> checks -> Sol revisa
-                                            ^          |
-                                            |-- correção
-  -> checkpoint -> integração -> Astra global
+```bash
+openssl pkeyutl -sign -rawin -inkey /local/privado/revisor.pem \
+  -in approval.json -out approval.sig
 ```
 
-Terra pode, antes de editar, propor subtarefas Luna dentro do seu escopo. O controlador executa cada filho e chama Terra para revisá-lo. Depois Terra recebe as provas e implementa a integração; Sol revisa essa integração e as alterações pertinentes. Não é necessário acionar Astra para encaminhar filhos.
+Traga **apenas a assinatura** de volta e verifique:
 
-### Sol: implementação complexa
-
-```text
-Astra define a tarefa -> Sol implementa -> checks -> Astra revisa localmente
-                                          ^               |
-                                          |--- correção ---|
-  -> checkpoint -> integração -> Astra global
+```bash
+codex-orchestrator approve RUN_ID \
+  --statement approval.json --signature approval.sig --identity revisor@empresa
+codex-orchestrator gate RUN_ID
 ```
 
-Sol pode propor Terra ou Luna diretamente. Uma subtarefa Terra também pode propor Luna. Cada pai pode delegar uma vez, antes de editar, sempre para um nível inferior e com escopo contido. O contexto transmitido é contrato + referências de provas, não o histórico de conversas.
+A declaração inclui namespace, run, nonce, snapshot, hash da Spec, configuração e evidências. Código/evidências alterados, chave não autorizada, assinatura adulterada ou declaração de outra run não aprovam. A assinatura prova controle da chave e aceite daquele payload, não que o humano realizou uma revisão perfeita. Nunca deixe a chave privada acessível ao modelo nem confunda esse mecanismo com isolamento multiusuário do sistema operacional.
 
-As duas atuações de Astra no fluxo Sol têm escopos diferentes: **revisão local** e **validação sistêmica**. Não são duas releituras obrigatórias do mesmo diff.
+## Hooks, evidências e recuperação
 
-### Escalonamento e correção global
-
-Após o limite de tentativas: `Luna -> Terra`, com Sol revisando; `Terra -> Sol`, com Astra revisando. O patch existente é preservado para diagnóstico/correção. Sol esgotando as tentativas bloqueia para replanejamento; Astra não implementa e aprova a própria alteração.
-
-Achados globais que apontem tarefas existentes geram tarefas de reparo delimitadas, com seus próprios checks e revisão. O conjunto é testado novamente. Achados que exigem novo escopo ou uma mudança global param para replanejamento. Nenhuma correção é iniciada se já não houver rodada final disponível para validá-la.
-
-## Hooks: o que fazem e o que não fazem
-
-| Hook instalado | Função |
+| Hook | Papel |
 |---|---|
-| `SessionStart` | Fornece ID da sessão e instrução curta de vínculo com a execução |
-| `Stop` | Consulta a run vinculada, verifica conclusão válida e evita afirmação de sucesso com evidência obsoleta |
+| `SessionStart` | Informa o identificador para vincular somente a sessão solicitada. |
+| `Stop` | Verifica o gate, não afirma sucesso em bloqueios e impede continuações infinitas. |
+| `PostModelRequest` | Registra uso compacto opcional dos processos gerenciados; não lê transcrições nem inicia modelos. |
 
-O `Stop` pode solicitar **uma** continuação quando a run ainda está pendente. `stop_hook_active` impede loops. Uma run bloqueada/interrompida pode ser reportada como bloqueada; o hook não força tentativas infinitas. As invocações gerenciadas não ficam esperando a aprovação global para poder encerrar: o próprio controlador verifica cada fase.
+Não existe launcher de revisão em `SubagentStop`: processos `codex exec` não são as threads nativas de `spawn_agent`. O controlador mantém a máquina de estados fora dos agentes. Hooks não substituem transições e validações do runtime.
 
-**Não há launcher de revisão em `SubagentStop`.** O runtime usa processos `codex exec`, não threads criadas por `spawn_agent`. Misturar esses dois ciclos seria um erro. Os hooks não chamam modelos, não leem transcrições e não decidem o revisor.
-
-Hooks precisam ser confiados, podem ser desativados por políticas locais e não constituem uma fronteira de segurança completa. Os gates de testes/revisão/estado são aplicados pelo controlador mesmo sem os hooks. Para regras organizacionais de merge, mantenha também a CI e as aprovações externas do seu projeto.
-
-## Estado, retomada e evidências
-
-Cada run cria a branch `orchestrator/RUN_ID` e uma worktree isolada. O checkout original não é modificado. A worktree fica, por padrão, em `../.codex-orchestrator-worktrees/REPO_ID/RUN_ID`, fora do projeto e de `.git`; esse local precisa ser gravável. É possível definir `runtime.worktree_root` para outro diretório externo. Estado e artefatos ficam em:
-
-```text
-<GIT_COMMON_DIR>/codex-orchestrator/
-├── controller.lock
-├── sessions/
-└── runs/RUN_ID/
-    ├── state.json
-    ├── calls/0001-T1-implement/
-    │   ├── request.json
-    │   ├── schema.json
-    │   ├── response.json
-    │   ├── events.jsonl
-    │   └── stderr.log
-    └── checks/.../
-        ├── evidence.json
-        └── *.log
-```
-
-O estado é gravado por substituição atômica. Um lock do sistema operacional evita controladores concorrentes no mesmo repositório e é liberado automaticamente quando o processo termina.
+Artefatos ficam em `GIT_COMMON_DIR/codex-orchestrator/runs/RUN_ID/`: plano, estado, requests/responses, JSONL, logs de checks, handoffs, cápsulas e atestados. Contêm código e dados do projeto; trate-os como material privado. Worktrees ficam fora do checkout e dos metadados Git. A branch final é `orchestrator/RUN_ID`; branches de tarefa usam `orchestrator-task/RUN_ID/...`.
 
 ```bash
 codex-orchestrator list
 codex-orchestrator status RUN_ID
 codex-orchestrator resume RUN_ID
-codex-orchestrator gate RUN_ID
 ```
 
-`resume` conserva orçamento, resultados e aprovações. Uma falha de serviço durante a revisão retoma a revisão, não reimplementa uma tarefa já testada. Uma implementação interrompida é retomada como uma nova tentativa que precisa inspecionar o diff parcial. Alterações externas na worktree interrompem a retomada automática.
+Retomada verifica integridade e **não zera orçamento/tentativas**. Aprovação só vale para o conteúdo validado. Uma edição externa, assinatura obsoleta ou evidência adulterada impede o gate. Intenções de integração persistidas permitem reconhecer um fast-forward concluído antes de uma interrupção.
 
-Revisões são vinculadas ao fingerprint do código e às evidências dos checks. Uma edição depois da aprovação invalida o `gate`. Revisores usam sandbox `read-only`, e o controlador também detecta alterações feitas durante revisão.
+Telemetria desconhecida não é resolvida por tentativa cega: a run permanece bloqueada para investigação. Não existe comando de zerar custos nem autoaprovação de consumo desconhecido. Para replanejar, preserve os artefatos anteriores, investigue a causa e submeta explicitamente um novo plano, contabilizando também o gasto anterior externamente.
 
-Checkpoints têm autor explícito **Codex Orchestrator**, não se passam pelo usuário e não são assinados. Hooks de commit existentes são respeitados; mudanças de código provocadas por eles invalidam a aprovação. O runtime não faz push nem merge.
+O runtime não faz auto-push nem merge na branch de trabalho do usuário. Depois do gate, siga o workflow do projeto. Se o destino avançar ou a integração mudar código, execute os testes/revisões necessários sobre o resultado integrado; o gate anterior não se estende automaticamente ao novo snapshot.
 
-Depois do gate, examine o diff e integre conforme o workflow do projeto. Uma aprovação vale para o snapshot revisado: se a branch de destino avançou ou o merge alterou o código, execute novamente a validação adequada no resultado integrado. Não remova a worktree antes de concluir essa verificação; o gate precisa dela para conferir o snapshot.
-
-## Tokens e eficiência
-
-`status` agrega os tokens **reportados pelo Codex**, por papel e fase. Registra `input_tokens`, `cached_input_tokens`, `output_tokens` e outros campos disponíveis, incluindo raciocínio quando informado. Entrada em cache não deve ser somada de novo à entrada; raciocínio não deve ser somado novamente à saída.
-
-`usage_missing` informa chamadas sem telemetria. Ausência de informação não vira custo zero. O runtime não inventa preço por token nem calcula notas hipotéticas de qualidade.
-
-A economia estrutural vem de despacho determinístico, contextos separados, evidências por referência, checks antes da revisão e uma validação global por rodada. O resultado financeiro depende do consumo e do retrabalho reais.
-
-```toml
-[runtime]
-command = ["codex"]
-attempts_per_tier = 2
-max_calls = 40
-max_tasks = 64
-max_global_rounds = 2
-model_timeout = 900
-check_timeout = 300
-```
-
-O orçamento de chamadas inclui implementação, revisões, delegação e validação global. Ele é verificado **antes** de iniciar outra chamada, mas não limita os tokens que uma única chamada já iniciada pode consumir. O timeout limita o tempo por processo.
-
-## Demonstração e testes
-
-### Testes do controlador: sem modelos e sem credenciais
+## Migração da 0.1
 
 ```bash
-git clone https://github.com/A1b3rt0M3rcad0/codex-orchestrator.git
-cd codex-orchestrator
+python -m pip install --upgrade \
+  "git+https://github.com/A1b3rt0M3rcad0/codex-orchestrator.git"
+codex-orchestrator install
+codex-orchestrator migrate-config
+```
+
+`install` preserva `orchestrator.toml` v1 e escreve um exemplo v2. `migrate-config` é explícito: guarda `orchestrator.toml.v1.bak`, preserva comandos/modelos e converte `attempts_per_tier` em limites por papel. Revise a política nova e faça commit do setup.
+
+**Planos v1 não são convertidos por adivinhação.** Acrescente `reads`, `risk_tags`, `test_contract`, `adversarial_checks` e `checkpoint_checks`, escreva os testes principais e valide o plano v2. Runs v1 não são retomadas pelo runtime v2; finalize com a 0.1 ou replaneje preservando o trabalho. Não há caminho legado que contorne os controles novos.
+
+## Testes e demonstração
+
+```bash
 python -m pip install --no-deps .
 python -m unittest discover -s tests -v
 python -m compileall -q codex_orchestrator
 ```
 
-A suíte usa `tests/fake_codex.py` como **subprocesso de teste**, não como backend de produção. Exercita os três fluxos, delegação aninhada, testes reprovados, revisão reprovada, escalonamento, reparos globais, limites, timeout, retomada, evidência obsoleta, mutação por revisor, instalação e hooks. A CI não chama modelos nem recebe segredos.
+A suíte inclui caminhos felizes e falhas: risco, oráculos, corrupção de evidência, escalonamento, checkpoints, paralelismo, conflitos, budgets, retomada, instalação e assinaturas Ed25519 reais com chaves **temporárias de teste**. O CLI simulado está isolado em `tests/fake_codex.py`; nunca é backend padrão de produção.
 
-### Smoke test real, opt-in e sujeito ao consumo da conta
+### Smoke test real — opt-in, consome a conta
 
-`examples/demo_project/` contém uma função incompleta e testes de regressão. `examples/demo.plan.json` manda corrigir somente a função, sem permitir alterações nos testes.
+Com Codex autenticado, execute em uma cópia temporária do exemplo:
 
 ```bash
-# Execute a partir do clone deste repositório, com o CLI instalado.
-cp -R examples/demo_project /tmp/co-demo
-cp examples/demo.plan.json /tmp/co-demo/plan.json
-cd /tmp/co-demo
-git init
+cp -R examples/demo_project /tmp/codex-orchestrator-demo
+cp examples/demo.plan.json /tmp/codex-orchestrator-demo/plan.json
+cd /tmp/codex-orchestrator-demo
+git init -b main
 codex-orchestrator install
 ```
 
-Em `orchestrator.toml`, habilite o check:
+Configure o check `unit` do exemplo:
 
 ```toml
 [checks]
 unit = ["{python}", "-m", "unittest", "discover", "-s", "tests", "-v"]
 ```
 
+Revise/autorize hooks e o uso dos modelos, depois:
+
 ```bash
 git add .
-git commit -m "test: prepare orchestrator smoke project"
+git commit -m "Prepare independent acceptance contract"
 codex-orchestrator doctor
 codex-orchestrator validate plan.json
 codex-orchestrator run plan.json
-# Use o RUN_ID devolvido:
-codex-orchestrator status RUN_ID
 codex-orchestrator gate RUN_ID
 ```
 
-Essa demonstração chama Luna, Terra e Astra de verdade, conforme a configuração. Ela **não foi executada com modelos reais no ambiente de criação deste repositório**, que não possuía Codex autenticado.
+Os testes do exemplo falham no baseline por comportamento não implementado. Sem Codex autenticado, não há smoke test real. `doctor` passando, testes simulados passando e assinatura válida não demonstram qualidade dos modelos.
 
-## Limites e compatibilidade
+## Limites explícitos
 
-Esta versão não oferece execução paralela, containerização própria, daemon, MCP server, revisão criptograficamente assinada, autorização entre usuários, auto-push ou auto-merge. O estado local é controlado pelo mesmo usuário do processo; não é armazenamento imutável contra um usuário hostil.
+O controlador implementa política de execução e evidência; não prova correção semântica total. A suficiência dos testes, a declaração de dependências e as regras específicas de risco continuam exigindo revisão. Contextos separados não eliminam correlação entre modelos; aprovação humana é uma fonte adicional de decisão, não garantia matemática.
 
-Os comandos de teste são código do projeto e rodam como o usuário do controlador. Execute apenas projetos/checks que você confia. As worktrees isolam alterações de código, não substituem containers nem isolam rede/credenciais de todo processo. Variáveis de credenciais comuns são removidas dos subprocessos de checks, mas isso não equivale a um ambiente hermético.
+Worktrees isolam código, não rede, credenciais, bancos ou processos externos. Checks são código do projeto executado sob o usuário do controlador. Use somente comandos confiáveis e isolamento de SO/container apropriado quando necessário. Estado local e allowlist não são um serviço de autorização contra um administrador hostil da mesma máquina. Assinaturas dependem de manter a chave privada fora do alcance dos executores.
 
-`codex exec` pode herdar instruções, MCPs e políticas locais. O controlador preserva essas políticas, usa `approval_policy="never"`, não ativa `--yolo` e não ignora regras/trust. Ações que precisem de nova autorização falham, em vez de ganhar permissão silenciosamente.
+O sistema não fornece daemon, MCP server, gerenciamento de dependências/serviços, publicação automática, garantias de economia ou faturamento rígido via CLI. Não muda configurações de conta nem contorna a sandbox do Codex.
 
-Flags obrigatórias são verificadas pelo `doctor`. A documentação de release é a referência, não a branch `main` do Codex, que pode conter recursos ainda não lançados. Acesso aos modelos e compatibilidade real devem ser confirmados no seu ambiente.
-
-## Estrutura e referências
+## Estrutura e documentação oficial
 
 ```text
 codex_orchestrator/
-├── assets/SKILL.md       # skill distribuída pelo instalador
-├── assets/WORKFLOW.md    # detalhes carregados sob demanda
-├── contracts.py         # schemas, DAG, escopos e critérios
-├── system.py            # Git, snapshots, processos, lock e configuração
-├── runtime.py           # máquina de estados e despacho
-├── install.py           # instalação conservadora
-├── hooks.py             # integração com o ciclo de vida do Codex
-└── cli.py               # comandos públicos
-examples/                # smoke test real, explicitamente opt-in
-tests/                   # unitários e integração com CLI simulado
-.github/workflows/       # CI sem chamadas a modelos
+  assets/       skill e referência de workflow
+  contracts.py  plano, respostas e validação estrita
+  config.py     configuração e limites
+  policy.py     pisos de risco e oráculos selados
+  budget.py     reservas e telemetria
+  model.py      adaptador codex exec
+  evidence.py   handoffs, cápsulas e assinatura externa
+  runtime.py    máquina de estados, scheduler e integração
+  system.py     Git, processos, locks e arquivos
+  hooks.py      ciclo de vida e telemetria opcional
+  install.py    instalação conservadora/migração
+  cli.py        comandos
+examples/       baseline e contrato de demonstração
+tests/          unitários e integração com CLI explicitamente simulado
+docs/           matriz Q1 e relatório de validação
 ```
 
-Fontes oficiais consultadas em 04/11/2026:
+Fontes do contrato de integração, a revalidar ao atualizar o CLI:
 
-- [Codex: execução não interativa, JSONL e saída estruturada](https://learn.chatgpt.com/docs/non-interactive-mode)
-- [Codex: hooks, trust e semântica de Stop](https://learn.chatgpt.com/docs/hooks)
-- [Codex: subagentes e limitações de configuração](https://learn.chatgpt.com/docs/agent-configuration/subagents)
-- [Codex: formato e descoberta de skills](https://learn.chatgpt.com/docs/build-skills)
-- [Catálogo oficial de modelos](https://developers.openai.com/api/docs/models)
+- [Codex — execução não interativa](https://developers.openai.com/codex/noninteractive)
+- [Codex — hooks](https://developers.openai.com/codex/hooks)
+- [Codex — configuração](https://developers.openai.com/codex/config-reference)
+- [Codex — skills](https://developers.openai.com/codex/skills)
+- [OpenSSL — pkeyutl e Ed25519](https://docs.openssl.org/3.5/man1/openssl-pkeyutl/)
 
-A política de revisão e o controlador deste repositório são implementação própria; não são um recurso oficial da OpenAI nem uma promessa de qualidade equivalente entre modelos.
+A política, os hooks instalados e este controlador são implementação própria. Não são um workflow oficial da OpenAI.

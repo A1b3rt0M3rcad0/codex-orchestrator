@@ -1,6 +1,5 @@
-"""Conservative, idempotent installation into an existing Git project."""
+"""Conservative installation and explicit v1 configuration migration."""
 from __future__ import annotations
-
 import hashlib
 import json
 import os
@@ -8,130 +7,172 @@ import shlex
 import sys
 import tomllib
 from pathlib import Path
-
 from .contracts import DEFAULT_MODELS, OrchestratorError
-from .system import atomic_json, repo_root
+from .system import atomic_json, exclusive, repo_root, store_root
 
 ASSETS = Path(__file__).parent / "assets"
-START, END = "# BEGIN codex-orchestrator", "# END codex-orchestrator"
 AGENTS_BLOCK = """<!-- BEGIN codex-orchestrator -->
-When `$codex-orchestrator` is requested, read its SKILL.md and use the deterministic
-controller. Do not simulate approvals, launch recursive controllers, or bypass
-failed checks. Implementation runs in an isolated worktree; the user's checkout
-must remain unchanged. Only report success after `codex-orchestrator gate` passes.
-Use existing project skills/standards where applicable; never replace them.
+When `$codex-orchestrator` is requested, read its SKILL.md and use the controller.
+Prepare independent acceptance tests before implementation. Do not bypass risk
+floors, sealed tests, budgets, checkpoints, independent review or human signatures.
+Managed workers must not recursively launch controllers. The original checkout
+must remain unchanged. Report completion only when `codex-orchestrator gate` passes.
+Use applicable existing project skills and standards; never replace them.
 <!-- END codex-orchestrator -->"""
 
 
 def default_config() -> str:
-    text = '# Explicit models, bounded work and real project checks.\nversion = 1\n\n'
+    text = '# v2: explicit policy and bounded work. Configure real checks before use.\nversion = 2\n\n'
     for role, settings in DEFAULT_MODELS.items():
         text += f"[models.{role}]\n" + "".join(f"{k} = {json.dumps(v)}\n" for k, v in settings.items()) + "\n"
-    text += '''[runtime]
+    return text + '''[runtime]
 command = ["codex"]
-# worktree_root = "/writable/location/outside/the/project"
-attempts_per_tier = 2
-max_calls = 40
+parallel_workers = 1
+checkpoint_every = 2
+checkpoint_repairs = 1
+max_calls = 80
 max_tasks = 64
 max_global_rounds = 2
 model_timeout = 900
 check_timeout = 300
 
+[attempts]
+luna = 2
+terra = 2
+sol = 2
+
+[budgets]
+mode = "observed" # CLI telemetry boundaries, NOT a hard provider invoice cap
+run_tokens = 2000000
+task_tokens = 500000
+call_tokens = 100000
+task_calls = 24
+# run_cost_usd = "10.00" # requires [prices.ROLE] for all four roles
+# task_cost_usd = "3.00"
+
+[policy]
+minimum_tier = "luna"
+extra_patterns = [] # additive critical path globs; built-in rules cannot be removed
+
+[verification]
+require_human = "critical" # or "all"; a model cannot approve this gate
+trusted_signers = "" # absolute JSON Ed25519 public-key allowlist outside the repository
+
 [checks]
-# REQUIRED: configure commands that validate YOUR project; no fake success checks.
+# REQUIRED: configure real checks for YOUR project; do not invent passing commands.
 # unit = ["{python}", "-m", "unittest", "discover", "-s", "tests", "-v"]
-# typecheck = ["npm", "run", "typecheck"]
-# integration = ["npm", "run", "test:integration"]
+# smoke = ["npm", "run", "test:integration"]
+# e2e = ["npm", "run", "test:e2e"]
+# adversarial = ["npm", "run", "test:negative"]
 '''
-    return text
+
+
+def local_path(root: Path, name: str) -> Path:
+    path = root / name
+    for item in [path, *path.parents]:
+        if item == root:
+            break
+        if item.is_symlink():
+            raise OrchestratorError(f"Refusing symlinked installation path: {name}")
+    if not path.resolve().is_relative_to(root):
+        raise OrchestratorError(f"Refusing escaped installation path: {name}")
+    return path
 
 
 def install(target: Path) -> list[str]:
     if os.name == "nt":
-        raise OrchestratorError("Native Windows hook installation is not validated. Install/run inside WSL.")
+        raise OrchestratorError("Native Windows hook installation is not validated; use WSL")
     root = repo_root(target)
-    manifest = root / ".codex/orchestrator-install.json"
-    previous = json.loads(manifest.read_text()) if manifest.exists() else {"managed": {}}
-    writes: dict[str, str] = {}
-    for file, destination in (("SKILL.md", ".agents/skills/codex-orchestrator/SKILL.md"),
-                              ("WORKFLOW.md", ".agents/skills/codex-orchestrator/references/workflow.md")):
-        writes[destination] = (ASSETS / file).read_text(encoding="utf-8")
-    for role in ("luna", "terra", "sol", "astra"):
-        modes = ("implement", "review") if role in ("terra", "sol") else (("review",) if role == "astra" else ("implement",))
-        for mode in modes:
-            name = f"co-{role}" if mode == "implement" else f"co-review-{role}"
-            settings = DEFAULT_MODELS[role]
-            instruction = (f"Act as the {role} {mode} role. Read the supplied contract and applicable AGENTS.md. "
-                           "Native helper results are advisory, not controller approvals. "
-                           "Do not launch codex-orchestrator or other Codex processes. "
-                           + ("Do not edit files; report evidence and actionable findings."
-                              if mode == "review" else "Only edit the assigned scope and report tests truthfully."))
-            writes[f".codex/agents/{name}.toml"] = (
-                f'name = "{name}"\ndescription = "{role.title()} {mode} helper; managed runs use the controller."\n'
-                f'model = "{settings["model"]}"\nmodel_reasoning_effort = "{settings["effort" if mode == "implement" else "review_effort"]}"\n'
-                f"developer_instructions = {json.dumps(instruction)}\n")
-    # Preflight managed files before changing any existing user file.
-    for name, content in writes.items():
-        path = root / name
-        if path.is_symlink() or not path.resolve().is_relative_to(root):
-            raise OrchestratorError(f"Refusing symlinked installation path: {name}")
-        if path.exists() and path.read_text(encoding="utf-8") != content:
-            old = previous.get("managed", {}).get(name)
-            if old != hashlib.sha256(path.read_bytes()).hexdigest():
-                raise OrchestratorError(f"Managed file was edited or already belongs to the project: {name}")
-    config_path = root / ".codex/config.toml"
-    config_text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
-    parsed = tomllib.loads(config_text)
-    if "codex-orchestrator" not in parsed.get("profiles", {}):
-        config_text += (f'\n{START}\n[profiles.codex-orchestrator]\nmodel = "gpt-6-astra"\n'
-                        f'model_reasoning_effort = "max"\n{END}\n')
-    tomllib.loads(config_text)
-    writes[".codex/config.toml"] = config_text
-    hooks_path = root / ".codex/hooks.json"
-    hooks = json.loads(hooks_path.read_text(encoding="utf-8")) if hooks_path.exists() else {"hooks": {}}
-    if not isinstance(hooks, dict) or not isinstance(hooks.get("hooks"), dict):
-        raise OrchestratorError("Existing hooks.json has an unsupported structure")
-    command = shlex.join([sys.executable, "-m", "codex_orchestrator", "hooks"])
-    for event in ("SessionStart", "Stop"):
-        groups = hooks["hooks"].setdefault(event, [])
-        if not isinstance(groups, list):
-            raise OrchestratorError(f"Invalid existing hook groups: {event}")
-        owned = [g for g in groups if any(h.get("statusMessage") == f"codex-orchestrator/{event}"
-                                         for h in g.get("hooks", []))]
-        handler = {"type": "command", "command": command, "timeout": 15,
-                   "statusMessage": f"codex-orchestrator/{event}"}
-        if event == "SessionStart":
-            handler["additionalContextLimit"] = 300
-        replacement = {"hooks": [handler]}
-        if owned:
-            # Replace only our handler, preserving any co-located user handlers.
-            for group in owned:
-                group["hooks"] = [h for h in group["hooks"]
-                                  if h.get("statusMessage") != f"codex-orchestrator/{event}"]
-            groups[:] = [g for g in groups if g.get("hooks")]
-        groups.append(replacement)
-    writes[".codex/hooks.json"] = json.dumps(hooks, indent=2, ensure_ascii=False) + "\n"
-    agents_path = root / "AGENTS.md"
-    agents = agents_path.read_text(encoding="utf-8") if agents_path.exists() else ""
-    if "<!-- BEGIN codex-orchestrator -->" not in agents:
-        agents += "\n\n" + AGENTS_BLOCK + "\n"
-    writes["AGENTS.md"] = agents
-    if not (root / "orchestrator.toml").exists():
-        writes["orchestrator.toml"] = default_config()
-    # Catch symlinks in all destination ancestors, including pre-existing config.
-    for name in writes:
-        path = root / name
-        if path.is_symlink() or not path.resolve().is_relative_to(root):
-            raise OrchestratorError(f"Refusing escaped installation path: {name}")
-    changed = []
-    for name, content in writes.items():
-        path = root / name
-        if path.exists() and path.read_text(encoding="utf-8") == content:
-            continue
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-        changed.append(name)
-    managed = {name: hashlib.sha256(content.encode()).hexdigest()
-               for name, content in writes.items() if name.startswith((".agents/", ".codex/agents/"))}
-    atomic_json(manifest, {"version": 1, "managed": managed})
-    return changed
+    with exclusive(store_root(root) / "controller.lock"):
+        manifest = local_path(root, ".codex/orchestrator-install.json")
+        previous = json.loads(manifest.read_text()) if manifest.exists() else {"managed": {}}
+        writes = {}
+        for source, destination in (("SKILL.md", ".agents/skills/codex-orchestrator/SKILL.md"),
+                                    ("WORKFLOW.md", ".agents/skills/codex-orchestrator/references/workflow.md")):
+            writes[destination] = (ASSETS / source).read_text(encoding="utf-8")
+        for name, content in writes.items():
+            path = local_path(root, name)
+            if path.exists() and path.read_text(encoding="utf-8") != content:
+                if previous.get("managed", {}).get(name) != hashlib.sha256(path.read_bytes()).hexdigest():
+                    raise OrchestratorError(f"Managed file was edited: {name}")
+        path = local_path(root, ".codex/config.toml")
+        config_text = path.read_text(encoding="utf-8") if path.exists() else ""
+        parsed = tomllib.loads(config_text)
+        if "codex-orchestrator" not in parsed.get("profiles", {}):
+            config_text += '\n# BEGIN codex-orchestrator\n[profiles.codex-orchestrator]\nmodel = "gpt-6-astra"\nmodel_reasoning_effort = "max"\n# END codex-orchestrator\n'
+        writes[".codex/config.toml"] = config_text
+        path = local_path(root, ".codex/hooks.json")
+        hooks = json.loads(path.read_text()) if path.exists() else {"hooks": {}}
+        if not isinstance(hooks, dict) or not isinstance(hooks.get("hooks"), dict):
+            raise OrchestratorError("Unsupported existing hooks.json")
+        command = shlex.join([sys.executable, "-m", "codex_orchestrator", "hooks"])
+        for event in ("SessionStart", "Stop", "PostModelRequest"):
+            groups = hooks["hooks"].setdefault(event, [])
+            if not isinstance(groups, list) or any(not isinstance(g, dict) or not isinstance(g.get("hooks"), list) for g in groups):
+                raise OrchestratorError(f"Invalid existing hook groups: {event}")
+            marker = f"codex-orchestrator/{event}"
+            for group in groups:
+                if any(not isinstance(h, dict) for h in group["hooks"]):
+                    raise OrchestratorError("Invalid existing hook handler")
+                group["hooks"] = [h for h in group["hooks"] if h.get("statusMessage") != marker]
+            groups[:] = [g for g in groups if g["hooks"]]
+            handler = {"type": "command", "command": command, "timeout": 15, "statusMessage": marker}
+            if event == "SessionStart":
+                handler["additionalContextLimit"] = 300
+            groups.append({"hooks": [handler]})
+        writes[".codex/hooks.json"] = json.dumps(hooks, indent=2, ensure_ascii=False) + "\n"
+        path = local_path(root, "AGENTS.md")
+        agents = path.read_text() if path.exists() else ""
+        if "<!-- BEGIN codex-orchestrator -->" not in agents:
+            agents += "\n\n" + AGENTS_BLOCK + "\n"
+        writes["AGENTS.md"] = agents
+        path = local_path(root, "orchestrator.toml")
+        if not path.exists():
+            writes["orchestrator.toml"] = default_config()
+        elif tomllib.loads(path.read_text()).get("version") == 1:
+            writes[".codex/orchestrator-v2.example.toml"] = default_config()
+        for name in writes:
+            local_path(root, name)
+        changed = []
+        for name, content in writes.items():
+            path = root / name
+            if path.exists() and path.read_text(encoding="utf-8") == content:
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+            changed.append(name)
+        managed = {name: hashlib.sha256(content.encode()).hexdigest() for name, content in writes.items() if name.startswith(".agents/")}
+        atomic_json(manifest, {"version": 2, "managed": managed})
+        return changed
+
+
+def migrate_config(target: Path) -> str:
+    root = repo_root(target)
+    with exclusive(store_root(root) / "controller.lock"):
+        path = local_path(root, "orchestrator.toml")
+        original = path.read_text()
+        old = tomllib.loads(original)
+        if old.get("version") == 2:
+            return "already-v2"
+        if old.get("version") != 1 or set(old) - {"version", "models", "checks", "runtime"}:
+            raise OrchestratorError("Unsupported v1 configuration; migrate explicitly")
+        runtime = old.get("runtime", {}).copy()
+        attempts = runtime.pop("attempts_per_tier", 2)
+        allowed = {"command", "worktree_root", "max_calls", "max_tasks", "max_global_rounds", "model_timeout", "check_timeout"}
+        if set(runtime) - allowed:
+            raise OrchestratorError("Unrecognized v1 runtime fields")
+        backup = local_path(root, "orchestrator.toml.v1.bak")
+        if backup.exists() and backup.read_text() != original:
+            raise OrchestratorError("Migration backup already exists with different contents")
+        text = "# Migrated from v1; original preserved in orchestrator.toml.v1.bak\nversion = 2\n"
+        for section, values in [("runtime", runtime), ("attempts", {x: attempts for x in ("luna", "terra", "sol")}),
+                                ("checks", old.get("checks", {}))]:
+            text += f"\n[{section}]\n" + "".join(f"{json.dumps(k)} = {json.dumps(v)}\n" for k, v in values.items())
+        for role, settings in old.get("models", {}).items():
+            if role not in DEFAULT_MODELS or set(settings) - {"model", "effort", "review_effort"}:
+                raise OrchestratorError("Unrecognized v1 model fields")
+            text += f"\n[models.{role}]\n" + "".join(f"{k} = {json.dumps(v)}\n" for k, v in settings.items())
+        tomllib.loads(text)
+        backup.write_text(original)
+        path.write_text(text)
+        return str(backup)
