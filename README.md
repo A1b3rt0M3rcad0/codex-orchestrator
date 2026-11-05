@@ -12,6 +12,7 @@
 - [Instalação](#instalação)
 - [Configuração](#configuração)
 - [Plano e contrato de testes](#plano-e-contrato-de-testes)
+- [Skills por tarefa](#skills-por-tarefa)
 - [Uso pela skill](#uso-pela-skill)
 - [Fluxos ponta a ponta](#fluxos-ponta-a-ponta)
 - [Paralelismo e integração](#paralelismo-e-integração)
@@ -250,6 +251,47 @@ O campo `strategy` é opcional para planos legados com `find` e `replace` (equiv
 `scope` é permissão de escrita; `reads` declara dependências relevantes ao scheduler e ao reuso de revisões. Use arquivos exatos ou prefixos terminados em `/`, nunca globs. Arquivos de controle e todos os testes principais são protegidos contra escrita, inclusive por outras tarefas.
 
 **Testes independentes não equivalem a testes perfeitos.** O controle garante proveniência temporal, imutabilidade e revisão do contrato. A suficiência dos casos exige julgamento; mudanças críticas mantêm o gate humano.
+
+## Skills por tarefa
+
+O Orchestrator agora vincula skills **obrigatórias e recomendadas** a tarefas usando um campo opcional do plano v2. O planejamento inicial continua sendo externo ao controlador Python: **Astra (ou o autor da Spec) escolhe as skills** antes de criar o plano; Luna, Terra e Sol executam a implementação com as instruções vinculadas.
+
+**1. Descubra o catálogo** no projeto consumidor:
+
+```bash
+codex-orchestrator --repo /caminho/projeto skills
+```
+
+O catálogo contém `name`, `description`, `path` e `sha256`. Só são elegíveis para vínculo auditável as skills locais versionadas em `.agents/skills/<diretorio>/SKILL.md`; skills pessoais, de plugins ou sem commit podem ser descobertas pelo Codex nativo, mas não são atestadas pelo controlador.
+
+**2. Associe skills a cada tarefa** na Spec:
+
+```json
+{
+  "id": "AUTH-01",
+  "tier": "sol",
+  "objective": "Implementar autenticação conforme os critérios de aceite",
+  "skills": {
+    "required": ["domain-modeling", "tdd"],
+    "recommended": ["codebase-design", "diagnosing-bugs"]
+  }
+}
+```
+
+O fragmento acima deve ser incluído em um objeto de tarefa completo. O campo `skills` é opcional, mantendo planos antigos compatíveis. Quando presente, exige as listas `required` e `recommended`, sem nomes repetidos. Os nomes referem-se ao `name` do frontmatter, e não necessariamente ao diretório. Não atribua a skill `codex-orchestrator` a workers gerenciados.
+
+**3. Valide e execute:**
+
+```bash
+codex-orchestrator --repo /caminho/projeto validate plano.json
+codex-orchestrator --repo /caminho/projeto run plano.json
+```
+
+O controlador rejeita skills ausentes, duplicadas ou adulteradas. Para cada chamada de implementação ele **inclui integralmente o SKILL.md das obrigatórias** no contexto, até um limite total de 40 KiB; as recomendadas são enviadas como referências compactas para descoberta sob demanda. As referências auxiliares e scripts das skills não são carregados automaticamente. O revisor recebe os vínculos como metadados e pode consultar as skills sem duplicar todos os textos.
+
+Em delegações, os filhos herdam as skills obrigatórias do pai e não podem acrescentar skills não aprovadas pela Spec. Os registros de chamada preservam hashes e artefatos `request.json`, verificados no gate junto ao catálogo do projeto.
+
+**Garantia exata:** o controlador prova que as instruções foram **entregues ao processo Codex**, não que o modelo as seguiu, executou scripts ou observou todas as boas práticas. A conformidade depende dos testes de aceite e da revisão independente. O suporte obrigatório limita-se às skills commitadas no projeto; não há planejamento automático de texto livre dentro do runtime.
 
 ## Uso pela skill
 
@@ -558,6 +600,7 @@ codex_orchestrator/
   quality.py    sondas de mutação e evidências de sensibilidade
   benchmark.py  relatório de qualidade/custo e baseline externo
   smoke.py      teste opt-in de conectividade dos modelos
+  skills.py     descoberta, seleção e evidência de entrega de skills
   cli.py        interface de linha de comando
 examples/       baseline e contrato de demonstração
 tests/          unitários e integração com CLI explicitamente simulado

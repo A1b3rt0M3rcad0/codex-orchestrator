@@ -9,9 +9,14 @@ Use the installed `codex-orchestrator` controller; never simulate its state mach
 in conversation. Read `references/workflow.md` for the exact contract and gates.
 
 1. Read applicable AGENTS.md, project specs and relevant skills. Inspect actual
-   source and checks. Do not select models merely to relay a message.
+   source and checks. Run `codex-orchestrator --repo REPO skills` first to
+   discover available, committed project skills. Do not select models
+   merely to relay a message.
 2. Prepare a v2 plan with observable acceptance criteria, exact write/read scopes,
-   dependencies, risk tags and criterion-to-test mappings. Put core acceptance
+   dependencies, risk tags and criterion-to-test mappings. The external
+   Astra planner selects optional per-task `skills: {"required": [...],
+   "recommended": [...]}` from the discovered catalog. Do not bind the
+   orchestrator's controller skill to a managed executor. Put core acceptance
    tests in committed files **before implementation**. Tests must not derive
    expected values from the implementation or be writable by executors. A failing
    baseline must be a known counterexample, not a broken runner/import.
@@ -31,7 +36,11 @@ in conversation. Read `references/workflow.md` for the exact contract and gates.
 5. Run `codex-orchestrator run PLAN.json --session-id SESSION_ID` when the actual
    SessionStart hook supplies an id; omit the option if no id is available. Do not
    invent an id. The caller must authorize Git/worktree/process permissions.
-6. Let the controller dispatch directly, test, review and integrate. Do not spawn
+6. Bound required SKILL.md instructions are delivered inline to implementation
+   requests; recommended skills are compact references. Child tasks inherit
+   required parent skills and cannot introduce unreviewed skills. Dispatch
+   evidence attests delivery, not model compliance.
+   Let the controller dispatch directly, test, review and integrate. Do not spawn
    competing native agents or another controller. `resume RUN_ID` preserves limits;
    never reset state to evade a failed budget or approval gate.
 7. On `awaiting_human`, report the exact run and approval-request file. A human must

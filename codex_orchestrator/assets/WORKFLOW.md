@@ -32,12 +32,32 @@ Scope/read paths are exact files or directory prefixes ending `/`; no globs,
 absolute paths, parent traversal or symlink escapes. Core acceptance files must
 be committed regular files outside every task's write scope.
 
+## Optional per-task project skills
+
+The external Astra planner/spec author first runs `codex-orchestrator skills`
+to discover Git-tracked `.agents/skills/<name>/SKILL.md` entries. Add optional
+`"skills": {"required": ["tdd"], "recommended": ["code-review"]}` to
+individual tasks. If present, both arrays are required, unique, and refer to
+existing catalog names. Controller skill cannot be bound to workers.
+
+A pinned catalog includes names, descriptions, paths, SHA-256 fingerprints.
+The implementation stage receives complete required SKILL.md text (40 KiB
+total maximum); recommended skills are only references. Reviewers get
+references, not redundant prompt text. Scripts/references are not automatically
+loaded. Child workers inherit required bindings; they cannot expand the
+planner-approved set. Final gate validates the pinned source and per-stage
+request artifacts. This proves instructions were delivered, not that a remote
+model followed them.
+
+Personal/global/plugin skills are not enforced by this project-only mechanism.
+The deterministic runtime does not automatically plan from arbitrary prose.
+
 ## Eight executable controls
 
-1. **Risk floor.** Built-in rules inspect task text, scoped/read paths, actual source
-   and the diff (including removed lines). Auth, payments, migrations, concurrency,
-   secrets, infrastructure, declared tags and additive project glob rules force
-   Sol/Astra and critical verification. Floors persist through delegation/repair.
+1. **Risk floor.** Lexical risk hints set a Terra floor, while material
+   sensitive code changes, declared critical tags, opaque changes and project
+   globs require Sol/Astra and critical verification. The decision is
+   monotonic through delegation and repair.
    Unknown/binary/large scoped content is treated conservatively. Regex/policy is
    not a proof of semantic risk detection; add project-specific critical paths.
 2. **Independent oracle.** Acceptance criteria map to checks and baseline outcomes.
@@ -126,10 +146,10 @@ never generates or consumes private keys.
 
 ## Q2: Mutation sensitivity, real-model smoke and comparative reports
 
-`test_contract` optionally contains `mutations`: array of `{file, find, replace,
-check, failure_marker}`. Every mutation must target exactly one existing
-implementation-file span, belong to the approved check list and trigger a
-recognizable assertion on a throwaway worktree. Surviving mutants, wrong failure
+`test_contract` optionally contains `mutations`: the recommended
+`file_replacement` (file/content/check/failure_marker) or legacy exact
+find/replace mutation. Each probe stays within implementation scope, uses
+an approved check and must trigger the expected regression assertion. Surviving mutants, wrong failure
 reasons and missing/stale probe evidence are NOT approvals. A mutation probe
 cannot edit the accepted candidate, test oracle or Git state. The default
 `verification.mutation_policy = critical` requires declared mutants for

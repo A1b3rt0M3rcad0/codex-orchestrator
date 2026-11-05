@@ -18,6 +18,8 @@ floors, sealed tests, budgets, checkpoints, independent review or human signatur
 Managed workers must not recursively launch controllers. The original checkout
 must remain unchanged. Report completion only when `codex-orchestrator gate` passes.
 Use applicable existing project skills and standards; never replace them.
+The external planner can query `codex-orchestrator skills` and bind
+required/recommended project skills per task. Delivery is not proof of compliance.
 <!-- END codex-orchestrator -->"""
 
 
