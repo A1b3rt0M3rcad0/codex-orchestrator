@@ -20,6 +20,7 @@ from .evidence import (approval_payload, artifact, capsule_fresh, compact_capsul
                        handoff, save_capsule, validate_delivery, verify_artifact, verify_checks,
                        verify_human)
 from .model import Model
+from .quality import probe_mutations
 from .policy import assess, guard, require_verification, route, seal
 from .system import (argv_expand, atomic_json, changed, command, commit, diff_bytes,
                      enforce_scope, exclusive, file_hash, git, load_config, repo_root,
@@ -211,8 +212,11 @@ class Engine:
             cases = [c for c in task["test_contract"]["cases"] if c["criterion"] in child["acceptance"]]
             if not {c["check"] for c in cases} <= set(child["checks"]):
                 raise OrchestratorError("Child omitted required acceptance checks")
+            mutations = [m for m in task["test_contract"].get("mutations", [])
+                         if in_scope(m["file"], child["scope"]) and m["check"] in child["checks"]]
             child.update(id=safe_id(task["id"] + "." + child["id"]),
-                         test_contract={"files": task["test_contract"]["files"], "cases": cases},
+                         test_contract={"files": task["test_contract"]["files"], "cases": cases,
+                                        **({"mutations": mutations} if mutations else {})},
                          adversarial_checks=task["adversarial_checks"], depends_on=[], parent_id=task["id"])
             validate_task(child, self.config["checks"])
             child = new_task(child, task["ancestors"])
@@ -304,6 +308,7 @@ class Engine:
                         self.save_task(task, "tests_failed")
                         continue
                     task["candidate_snapshot"] = snapshot(work)
+                    task["mutation_proof"] = probe_mutations(self, task, work)
                     task["status"] = "reviewing"
                     self.save_task(task)
                 if task["status"] == "reviewing":
@@ -311,7 +316,8 @@ class Engine:
                         raise OrchestratorError("Candidate changed since checks; refusing stale evidence")
                     reviewer = REVIEWER[task["tier"]]
                     phase = task.get("review_phase", "review")
-                    result, ref = self.review(phase, reviewer, task, work, task["checks_evidence"], diff_base=task["base"])
+                    result, ref = self.review(phase, reviewer, task, work, task["checks_evidence"],
+                                              diff_base=task["base"], mutation_proof=task.get("mutation_proof"))
                     task.setdefault("reviews", []).append(ref)
                     if result["decision"] == "blocked":
                         raise OrchestratorError(f"Review blocked: {result['summary']}")
@@ -488,8 +494,11 @@ class Engine:
             if capsule_fresh(task["proof"], task, self.work, self.state["sealed"]):
                 continue
             ok, checks = self.check(self.work, task["checks"] + task["adversarial_checks"], "refresh-" + ident)
+            if ok:
+                task["mutation_proof"] = probe_mutations(self, task, self.work)
             result, ref = self.review("refresh", REVIEWER[task["tier"]], task, self.work, checks,
-                                      previous_capsule=task["proof"], diff_base=task["base"], checks_passed=ok)
+                                      previous_capsule=task["proof"], diff_base=task["base"], checks_passed=ok,
+                                      mutation_proof=task.get("mutation_proof"))
             if result["decision"] != "approve":
                 return result
             if not ok:

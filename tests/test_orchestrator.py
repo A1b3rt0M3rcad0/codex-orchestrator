@@ -272,7 +272,9 @@ class CriticalTests(ProjectCase):
         self.assertTrue(gate(self.root,s['id'])['approved'])
 
     def test_dynamic_risk_detection_reexecutes_at_required_tier(self):
-        self.signer();self.plan['tasks'][0]['adversarial_checks']=['negative'];self.flush();self.scenario('risk-after')
+        self.signer();self.plan['tasks'][0]['adversarial_checks']=['negative']
+        self.plan['tasks'][0]['test_contract']['mutations']=[{"file":"value.txt","find":"ok","replace":"bad","check":"unit","failure_marker":"AssertionError"}]
+        self.flush();self.scenario('risk-after')
         s=self.execute();roles=[c['role'] for c in self.calls() if c['mode']=='implement']
         self.assertEqual(roles,['luna','sol']);self.assertEqual(s['status'],'awaiting_human')
 

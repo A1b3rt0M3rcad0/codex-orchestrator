@@ -103,3 +103,6 @@ def require_verification(task: dict, config: dict) -> None:
             raise OrchestratorError(f"{task['id']}: critical task requires independent adversarial_checks")
         if not config["verification"]["trusted_signers"]:
             raise OrchestratorError("Critical task requires trusted_signers for the external human approval gate")
+    policy = config["verification"]["mutation_policy"]
+    if (policy == "all" or (policy == "critical" and task["risk"]["critical"])) and not task["test_contract"].get("mutations"):
+        raise OrchestratorError(f"{task['id']}: risk policy requires pre-approved mutation tests")

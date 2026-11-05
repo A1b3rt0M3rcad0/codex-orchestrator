@@ -12,6 +12,8 @@ from .hooks import handle
 from .install import install, migrate_config
 from .policy import assess, require_verification, route, seal
 from .runtime import approve, gate, report, run
+from .smoke import smoke_models
+from .benchmark import benchmark
 from .system import argv_expand, command, load_config, repo_root, store_root
 
 
@@ -32,6 +34,13 @@ def main(argv=None) -> int:
         sub.add_argument("run_id")
         if name == "resume":
             sub.add_argument("--session-id")
+    bench = subs.add_parser("benchmark", help="Evidence-only comparison of identical-spec runs")
+    bench.add_argument("run_ids", nargs="+", help="At least two persisted run IDs")
+    live = subs.add_parser("smoke-models", help="Explicit paid, read-only model/schema access check")
+    live.add_argument("--acknowledge-paid-requests", action="store_true")
+    live.add_argument("--roles", nargs="+", choices=["luna", "terra", "sol", "astra"],
+                      default=["luna", "terra", "sol", "astra"])
+    live.add_argument("--timeout", type=int, default=120)
     human = subs.add_parser("approve")
     human.add_argument("run_id")
     human.add_argument("--statement", type=Path, required=True)
@@ -54,7 +63,12 @@ def main(argv=None) -> int:
             result = {"backup": migrate_config(args.repo), "next": "Review new policy, then prepare a v2 test contract; plans are not guessed automatically."}
         else:
             root = repo_root(args.repo)
-            if args.command == "doctor":
+            if args.command == "benchmark":
+                result = benchmark(root, args.run_ids)
+            elif args.command == "smoke-models":
+                result = smoke_models(root, load_config(root), args.roles,
+                                      args.acknowledge_paid_requests, args.timeout)
+            elif args.command == "doctor":
                 cfg = load_config(root)
                 binary = argv_expand(cfg["runtime"]["command"])
                 version = command(binary + ["--version"], root).decode().strip()

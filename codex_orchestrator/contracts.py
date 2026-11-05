@@ -27,8 +27,10 @@ def canonical(value) -> bytes:
 def digest(value) -> str:
     return hashlib.sha256(canonical(value)).hexdigest()
 
-def obj(properties: dict) -> dict:
-    return {"type": "object", "properties": properties, "required": list(properties), "additionalProperties": False}
+def obj(properties: dict, optional: tuple[str, ...] = ()) -> dict:
+    return {"type": "object", "properties": properties,
+            "required": [key for key in properties if key not in optional],
+            "additionalProperties": False}
 
 def array(items: dict, minimum=0, maximum=64) -> dict:
     return {"type": "array", "items": items, "minItems": minimum, "maxItems": maximum}
@@ -39,8 +41,11 @@ TASK_FIELDS = {"id": TEXT, "tier": {"type": "string", "enum": list(ROLES)},
                "objective": TEXT, "scope": STRINGS, "reads": array(TEXT),
                "acceptance": STRINGS, "checks": STRINGS, "risk_tags": array(TEXT)}
 CHILD_SCHEMA = obj(TASK_FIELDS)
+MUTATION = obj({"file": TEXT, "find": TEXT, "replace": TEXT,
+                "check": TEXT, "failure_marker": TEXT})
 TEST_CONTRACT = obj({"files": STRINGS, "cases": array(obj({"criterion": TEXT, "check": TEXT,
-                    "baseline": {"type": "string", "enum": ["pass", "fail"]}, "rationale": TEXT}), 1)})
+                    "baseline": {"type": "string", "enum": ["pass", "fail"]}, "rationale": TEXT}), 1),
+                    "mutations": array(MUTATION, 1, 16)}, optional=("mutations",))
 TASK_SCHEMA = obj({**TASK_FIELDS, "depends_on": array(TEXT), "test_contract": TEST_CONTRACT,
                    "adversarial_checks": array(TEXT)})
 PLAN_SCHEMA = obj({"version": {"type": "integer", "enum": [2]}, "objective": TEXT,
@@ -62,8 +67,8 @@ def validate(data, schema: dict, path="$", depth=0) -> None:
     if "enum" in schema and data not in schema["enum"]:
         raise OrchestratorError(f"{path}: unsupported value {data!r}; use plan/config v2")
     if isinstance(data, dict):
-        if set(data) != set(schema["properties"]):
-            raise OrchestratorError(f"{path}: fields must be {list(schema['properties'])}")
+        if not set(schema["required"]) <= set(data) or set(data) - set(schema["properties"]):
+            raise OrchestratorError(f"{path}: fields must be selected from {list(schema['properties'])} and include {schema['required']}")
         for key, value in data.items():
             validate(value, schema["properties"][key], f"{path}.{key}", depth + 1)
     if isinstance(data, list):
@@ -142,6 +147,14 @@ def validate_task(task: dict, checks: dict) -> None:
             raise OrchestratorError("Every acceptance criterion needs an independent test case")
         if not set(task["adversarial_checks"]).issubset(checks):
             raise OrchestratorError("Unknown adversarial check")
+        for mutation in contract.get("mutations", []):
+            safe_path(mutation["file"])
+            if not in_scope(mutation["file"], task["scope"]) or mutation["file"].endswith("/"):
+                raise OrchestratorError("Mutation must target an exact implementation file")
+            if mutation["check"] not in task["checks"]:
+                raise OrchestratorError("Mutation check must be an existing approved acceptance check")
+            if mutation["find"] == mutation["replace"]:
+                raise OrchestratorError("Mutation find/replace must differ")
 
 def validate_plan(plan: dict, checks: dict) -> None:
     validate(plan, PLAN_SCHEMA)

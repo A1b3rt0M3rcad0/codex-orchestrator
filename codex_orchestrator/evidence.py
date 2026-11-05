@@ -76,6 +76,7 @@ def save_capsule(directory: Path, task: dict, work: Path, review: dict, checks: 
                "files": file_map(work, task["scope"] + task["reads"]), "risk": task["risk"],
                "model": model, "review": review, "checks": checks, "response": response_ref,
                "adversarial": task.get("challenge_reviews", [])[-1:],
+               "mutation_proof": task.get("mutation_proof"),
                "independence": "isolated_context_not_statistical_independence"}
     path = directory / "capsules" / f"{task['id']}-{digest(capsule)[:20]}.json"
     atomic_json(path, capsule)
@@ -97,6 +98,8 @@ def capsule_fresh(reference: dict, task: dict, work: Path, manifest: dict) -> bo
         validate_review(challenge, task["acceptance"], capsule["reviewed_snapshot"])
         if challenge["decision"] != "approve":
             raise OrchestratorError("Adversarial review did not approve this snapshot")
+    from .quality import verify_mutations
+    verify_mutations(capsule.get("mutation_proof"), task, capsule["reviewed_snapshot"])
     return (capsule["spec_sha256"] == digest(contract(task)) and
             capsule["oracle_sha256"] == digest(manifest) and capsule["risk"] == task["risk"] and
             capsule["files"] == file_map(work, task["scope"] + task["reads"]))

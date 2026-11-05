@@ -84,6 +84,8 @@ else:
         result["decision"] = "changes_requested"
         result["findings"] = [{"task_id": "global" if scenario == "global-scope" else "T1", "file": "value.txt", "detail": "Fix the observed fixture counterexample."}]
         result["acceptance"][0]["passed"] = False
+    if scenario == "invalid-smoke" and mode == "smoke":
+        result = {"wrong": True}
     if scenario == "invalid-output" and mode == "review":
         result = {"wrong": True}
     if scenario == "tamper-review" and mode == "review":
