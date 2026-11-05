@@ -191,7 +191,7 @@ Para alterações críticas, `test_contract.mutations` é obrigatório por padr�
 "mutations": [{"file":"src/textutil.py","find":"return value.strip()","replace":"return value","check":"acceptance","failure_marker":"AssertionError"}]
 ```
 
-O controlador aplica cada mutação em uma worktree descartável **após os checks
+Prefira a estratégia `file_replacement`, com um contraexemplo preaprovado independente do texto gerado, por exemplo: `{"strategy":"file_replacement","file":"src/textutil.py","content":"def normalize_label(value):\\n    return value\\n","check":"acceptance","failure_marker":"AssertionError"}`. O modo `exact_replace` continua disponível para código textual estável.\n\nO controlador aplica cada mutação em uma worktree descartável **após os checks
 verdes**, exige que o teste de aceite falhe com o marcador previsto e grava
 prova vinculada ao snapshot. Um mutante sobrevivente, timeout ou falha por motivo
 errado bloqueia o fluxo. Use `mutation_policy = "all"` para exigir o mecanismo

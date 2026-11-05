@@ -41,8 +41,10 @@ TASK_FIELDS = {"id": TEXT, "tier": {"type": "string", "enum": list(ROLES)},
                "objective": TEXT, "scope": STRINGS, "reads": array(TEXT),
                "acceptance": STRINGS, "checks": STRINGS, "risk_tags": array(TEXT)}
 CHILD_SCHEMA = obj(TASK_FIELDS)
-MUTATION = obj({"file": TEXT, "find": TEXT, "replace": TEXT,
-                "check": TEXT, "failure_marker": TEXT})
+MUTATION = obj({"file": TEXT, "check": TEXT, "failure_marker": TEXT,
+                "strategy": {"type": "string", "enum": ["exact_replace", "file_replacement"]},
+                "find": TEXT, "replace": TEXT, "content": TEXT},
+               optional=("strategy", "find", "replace", "content"))
 TEST_CONTRACT = obj({"files": STRINGS, "cases": array(obj({"criterion": TEXT, "check": TEXT,
                     "baseline": {"type": "string", "enum": ["pass", "fail"]}, "rationale": TEXT}), 1),
                     "mutations": array(MUTATION, 1, 16)}, optional=("mutations",))
@@ -153,7 +155,13 @@ def validate_task(task: dict, checks: dict) -> None:
                 raise OrchestratorError("Mutation must target an exact implementation file")
             if mutation["check"] not in task["checks"]:
                 raise OrchestratorError("Mutation check must be an existing approved acceptance check")
-            if mutation["find"] == mutation["replace"]:
+            strategy = mutation.get("strategy", "exact_replace")
+            if strategy == "file_replacement":
+                if "content" not in mutation or "find" in mutation or "replace" in mutation:
+                    raise OrchestratorError("file_replacement requires content and forbids find/replace")
+            elif "find" not in mutation or "replace" not in mutation or "content" in mutation:
+                raise OrchestratorError("exact_replace requires find/replace without content")
+            elif mutation["find"] == mutation["replace"]:
                 raise OrchestratorError("Mutation find/replace must differ")
 
 def validate_plan(plan: dict, checks: dict) -> None:
