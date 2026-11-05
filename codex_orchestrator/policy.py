@@ -16,50 +16,86 @@ PATTERNS = {
     "infrastructure": r"\b(terraform|kubernetes|dockerfile|deployment|iam|firewall|production\s+config)\b",
 }
 
+def _changed_behavior(work: Path, base: str, scope: list[str]) -> dict[str, str]:
+    """Only changed, non-comment lines can promote a path hint to critical."""
+    result = {}
+    untracked = set(command(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"], work
+    ).decode().strip("\0").split("\0"))
+    for name in changed(work):
+        if not in_scope(name, scope):
+            continue
+        if name in untracked:
+            path = work / name
+            data = path.read_bytes() if path.is_file() else b""
+            lines = data.decode("utf-8", errors="replace").splitlines()
+        else:
+            patch = command(
+                ["git", "diff", "--no-ext-diff", "--no-renames", "--unified=0", base, "--", name],
+                work,
+            ).decode("utf-8", errors="replace")
+            lines = [line[1:] for line in patch.splitlines()
+                     if line[:1] in {"+", "-"} and not line.startswith(("+++", "---"))]
+        material = [line.strip() for line in lines
+                    if line.strip() and not line.lstrip().startswith(
+                        ("#", "//", "/*", "*", "--", "<!--"))]
+        if material:
+            result[name] = "\n".join(material)
+    return result
+
+
 def assess(task: dict, config: dict, work: Path | None = None, base: str | None = None,
            inherited=()) -> dict:
-    tags = set(inherited) | set(task.get("risk_tags", [])) | set(task.get("risk", {}).get("tags", []))
-    text = "\n".join([task["objective"], *task["scope"], *task.get("reads", [])]).replace("_", " ").replace("/", " ")
+    old = task.get("risk", {})
+    explicit = set(task.get("risk_tags", [])) | set(inherited)
+    tags = set(old.get("tags", [])) | explicit
     reasons = []
     scanned = list(task["scope"] + task.get("reads", []))
     if work is not None:
-        files = sorted(set(tracked(work)) | set(changed(work)))
         size = 0
-        for name in files:
-            if not in_scope(name, task["scope"] + task.get("reads", [])):
+        for name in sorted(set(tracked(work)) | set(changed(work))):
+            if not in_scope(name, scanned):
                 continue
             scanned.append(name)
-            text += "\n" + name.replace("_", " ").replace("/", " ")
             path = work / name
             if path.is_symlink() or not path.resolve().is_relative_to(work.resolve()):
                 raise OrchestratorError(f"Symlink in risk scan: {name}")
-            if not path.is_file():
-                continue
-            size += path.stat().st_size
-            if size > 2 * 1024 * 1024:
-                tags.add("large_or_opaque_change")
-                break
-            data = path.read_bytes()
-            if b"\0" in data:
-                tags.add("large_or_opaque_change")
-            text += "\n" + data.decode("utf-8", errors="replace")
-        if base:
-            # Include removed sensitive behavior, not only the new file contents.
-            data = command(["git", "diff", "--no-ext-diff", "--no-renames", base, "--", *task["scope"]], work)
-            if len(data) > 2 * 1024 * 1024:
-                tags.add("large_or_opaque_change")
-            text += "\n" + data[:2 * 1024 * 1024].decode("utf-8", errors="replace")
+            if path.is_file():
+                size += path.stat().st_size
+                if size > 2 * 1024 * 1024 or b"\0" in path.read_bytes():
+                    tags.add("large_or_opaque_change")
+    hints = " ".join([task["objective"], *scanned]).replace("_", " ").replace("/", " ")
     for tag, pattern in PATTERNS.items():
-        if re.search(pattern, text, re.IGNORECASE):
+        if re.search(pattern, hints, re.IGNORECASE):
             tags.add(tag)
-            reasons.append(f"built-in:{tag}")
+            reasons.append(f"path_or_intent:{tag}")
+
+    critical = bool(explicit or old.get("critical") or "large_or_opaque_change" in tags)
+    if work is not None and base:
+        for name, lines in _changed_behavior(work, base, task["scope"]).items():
+            # Documentation changes are not operational changes. Unknown/binary
+            # payloads remain conservative through the separate opaque-file rule.
+            if Path(name).suffix.lower() in {".md", ".rst", ".adoc"}:
+                continue
+            label = name.replace("_", " ").replace("/", " ")
+            for tag, pattern in PATTERNS.items():
+                if re.search(pattern, label, re.IGNORECASE) or re.search(pattern, lines, re.IGNORECASE):
+                    tags.add(tag)
+                    critical = True
+                    reasons.append(f"changed_behavior:{tag}:{name}")
+
     for pattern in config["policy"]["extra_patterns"]:
         if any(fnmatch.fnmatchcase(p.lower(), pattern.lower()) for p in scanned):
             tags.add("project_policy")
+            critical = True
             reasons.append(f"project:{pattern}")
-    minimum = "sol" if tags else config["policy"]["minimum_tier"]
-    result = {"critical": bool(tags), "tags": sorted(tags), "minimum_tier": minimum,
-              "reasons": sorted(set(reasons) | {f"declared/inherited:{t}" for t in tags})}
+
+    # Hints alone have a Terra floor. Explicit policy, inherited critical risk,
+    # changed sensitive behavior, and opaque changes retain the Sol floor.
+    requested = config["policy"]["minimum_tier"]
+    minimum = "sol" if critical else ("terra" if tags and requested == "luna" else requested)
+    result = {"critical": critical, "tags": sorted(tags), "minimum_tier": minimum,
+              "reasons": sorted(set(reasons) | {f"declared/inherited:{t}" for t in explicit})}
     result["digest"] = digest(result)
     return result
 
@@ -69,16 +105,48 @@ def route(task: dict, risk: dict) -> bool:
     task["tier"] = ROLES[max(ROLES.index(old), ROLES.index(risk["minimum_tier"]))]
     return old != task["tier"]
 
+# Test runners and transitive configuration are part of the trusted oracle.
+RUNNER_FILES = {
+    "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock",
+    "bun.lock", "bun.lockb", "pyproject.toml", "poetry.lock", "uv.lock",
+    "pytest.ini", "tox.ini", "setup.cfg", "setup.py", "requirements.txt",
+    "Makefile", "GNUmakefile", "justfile", "Cargo.toml", "Cargo.lock",
+    "go.mod", "go.sum", "Gemfile", "Gemfile.lock", "composer.json",
+    "composer.lock", "tsconfig.json", "vitest.config.ts", "vitest.config.js",
+    "jest.config.js", "jest.config.ts", "playwright.config.ts",
+}
+
+
+def _runner_dependency(name: str) -> bool:
+    path = Path(name)
+    basename = path.name
+    return (basename in RUNNER_FILES or basename.startswith((
+                "requirements-", "pytest.", "jest.config.", "vitest.config.",
+                "playwright.config.", "conftest.", "webpack.config.",
+                "vite.config.", "babel.config.", "eslint.config."))
+            or name.startswith(("tests/", "test/", "__tests__/", ".github/workflows/"))
+            or "/tests/" in name or "/__tests__/" in name
+            or basename.endswith((".test.js", ".test.ts", ".spec.js", ".spec.ts")))
+
+
 def seal(root: Path, plan: dict, config: dict) -> dict:
     available = set(tracked(root))
     files = {p for t in plan["tasks"] for p in t["test_contract"]["files"]}
     for name in available:
-        if (name == "orchestrator.toml" or Path(name).name.lower() in {"agents.md", ".gitignore", ".gitattributes"}
-            or name.startswith((".codex/", ".agents/"))):
+        if (name == "orchestrator.toml" or Path(name).name.lower() in {
+                "agents.md", ".gitignore", ".gitattributes"}
+                or name.startswith((".codex/", ".agents/"))
+                or _runner_dependency(name)):
             files.add(name)
-    # Explicit script arguments to a configured check are part of its oracle.
+    # The user can protect custom test adapters/fixtures beyond detected runners.
+    for entry in config["verification"]["protected_paths"]:
+        matched = [name for name in available if in_scope(name, [entry])]
+        if not matched:
+            raise OrchestratorError(f"Protected runner path not committed: {entry}")
+        files.update(matched)
     for argv in config["checks"].values():
-        files.update(x for x in argv if x in available and Path(x).suffix in {".py", ".js", ".mjs", ".cjs", ".ts", ".sh", ".rb"})
+        files.update(x for x in argv if x in available and Path(x).suffix in {
+            ".py", ".js", ".mjs", ".cjs", ".ts", ".sh", ".rb"})
     result = {}
     for name in sorted(files):
         safe_path(name, protected=False)
@@ -88,10 +156,19 @@ def seal(root: Path, plan: dict, config: dict) -> dict:
         if any(in_scope(name, t["scope"]) for t in plan["tasks"]):
             raise OrchestratorError(f"Protected test/config file overlaps implementation scope: {name}")
         result[name] = {"sha256": file_hash(path), "mode": path.stat().st_mode & 0o777}
+    # Keep policy in the sealed manifest so newly created protected files
+    # cannot silently become new test implementations or runner adapters.
+    result["$protected_paths"] = {"paths": list(config["verification"]["protected_paths"])}
     return result
 
 def guard(root: Path, manifest: dict) -> None:
+    protected = manifest.get("$protected_paths", {}).get("paths", [])
+    for name in set(tracked(root)) | set(changed(root)):
+        if (_runner_dependency(name) or in_scope(name, protected)) and name not in manifest:
+            raise OrchestratorError(f"Protected runner path was added after sealing: {name}")
     for name, expected in manifest.items():
+        if name == "$protected_paths":
+            continue
         path = root / name
         if (not path.is_file() or path.is_symlink() or not path.resolve().is_relative_to(root.resolve()) or
             file_hash(path) != expected["sha256"] or path.stat().st_mode & 0o777 != expected["mode"]):

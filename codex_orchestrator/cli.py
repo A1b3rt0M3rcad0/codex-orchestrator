@@ -36,6 +36,7 @@ def main(argv=None) -> int:
             sub.add_argument("--session-id")
     bench = subs.add_parser("benchmark", help="Evidence-only comparison of identical-spec runs")
     bench.add_argument("run_ids", nargs="+", help="At least two persisted run IDs")
+    bench.add_argument("--direct-baseline", type=Path, help="JSON of independently measured direct-Sol trials")
     live = subs.add_parser("smoke-models", help="Explicit paid, read-only model/schema access check")
     live.add_argument("--acknowledge-paid-requests", action="store_true")
     live.add_argument("--roles", nargs="+", choices=["luna", "terra", "sol", "astra"],
@@ -64,7 +65,7 @@ def main(argv=None) -> int:
         else:
             root = repo_root(args.repo)
             if args.command == "benchmark":
-                result = benchmark(root, args.run_ids)
+                result = benchmark(root, args.run_ids, direct_baseline=args.direct_baseline)
             elif args.command == "smoke-models":
                 result = smoke_models(root, load_config(root), args.roles,
                                       args.acknowledge_paid_requests, args.timeout)

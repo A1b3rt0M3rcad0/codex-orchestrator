@@ -129,7 +129,7 @@ trusted_signers = ""
 # adversarial = ["npm", "run", "test:negative"]
 ```
 
-`{python}` significa o interpretador do controlador. Comandos são arrays de argumentos, sem shell implícito. Formatadores precisam estar em modo check. Dependências, bancos de teste e serviços devem existir nas worktrees; o controlador não instala nem inventa esses serviços. Para executar em paralelo, os próprios checks precisam isolar bancos, portas e arquivos externos — worktrees não isolam recursos fora do checkout.
+Os testes, manifests/lockfiles e configurações comuns de runners são selados automaticamente. Para dependências personalizadas de checks, configure `verification.protected_paths = ["checks/support/", "fixtures/contract.json"]` (caminhos exatos ou prefixos de diretório rastreados no Git). O gate detecta também arquivos de suporte novos introduzidos após a selagem. Alterações legítimas a esses arquivos exigem atualizar o contrato antes da execução.\n\n`{python}` significa o interpretador do controlador. Comandos são arrays de argumentos, sem shell implícito. Formatadores precisam estar em modo check. Dependências, bancos de teste e serviços devem existir nas worktrees; o controlador não instala nem inventa esses serviços. Para executar em paralelo, os próprios checks precisam isolar bancos, portas e arquivos externos — worktrees não isolam recursos fora do checkout.
 
 Os papéis configuráveis padrão são:
 
@@ -144,7 +144,7 @@ Cada `[models.PAPEL]` permite `model`, `effort`, `review_effort` e `family`. Nã
 
 ### Política de risco
 
-Auth/autorização/tenancy, pagamentos, migrations, concorrência, segredos e infraestrutura possuem detectores embutidos. A análise usa metadados, caminhos reais sob os escopos, conteúdo e diff, inclusive exclusões. Tags declaradas, regras adicionais e conteúdo binário/grande também podem elevar a classificação. O piso crítico é **Sol implementa → Astra revisa**, com verificação adversarial e assinatura externa.
+Auth/autorização/tenancy, pagamentos, migrations, concorrência, segredos e infraestrutura possuem detectores embutidos. Nomes de caminhos e intenção textual são **indícios** que impõem piso Terra, sem aprovação humana automática. O diff com linhas materiais de código em área sensível, tags críticas declaradas/herdadas, regras explícitas do projeto ou conteúdo binário/opaco impõem piso **Sol implementa → Astra revisa**, com verificação adversarial e assinatura externa. Mudanças exclusivamente em comentários ou documentação não se tornam críticas só pelo nome do arquivo. Uma heurística lexical continua insuficiente para decidir todos os casos semânticos.
 
 Regras são monotônicas: o plano não desativa detectores e filhos não descartam o risco herdado. Uma descoberta após edição preserva o patch e exige reavaliação pelo executor superior. Regras de caminhos específicas do projeto devem complementar os detectores; nenhuma heurística lexical garante descobrir todo risco semântico.
 
@@ -191,7 +191,7 @@ Para alterações críticas, `test_contract.mutations` é obrigatório por padr�
 "mutations": [{"file":"src/textutil.py","find":"return value.strip()","replace":"return value","check":"acceptance","failure_marker":"AssertionError"}]
 ```
 
-O controlador aplica cada mutação em uma worktree descartável **após os checks
+Prefira a estratégia `file_replacement`, com um contraexemplo preaprovado independente do texto gerado, por exemplo: `{"strategy":"file_replacement","file":"src/textutil.py","content":"def normalize_label(value):\\n    return value\\n","check":"acceptance","failure_marker":"AssertionError"}`. O modo `exact_replace` continua disponível para código textual estável.\n\nO controlador aplica cada mutação em uma worktree descartável **após os checks
 verdes**, exige que o teste de aceite falhe com o marcador previsto e grava
 prova vinculada ao snapshot. Um mutante sobrevivente, timeout ou falha por motivo
 errado bloqueia o fluxo. Use `mutation_policy = "all"` para exigir o mecanismo
@@ -441,6 +441,14 @@ Para comparar qualidade/custo de múltiplas execuções idênticas:
 ```bash
 codex-orchestrator --repo /caminho/projeto benchmark RUN_ID_1 RUN_ID_2
 ```
+
+Para medir a contribuição econômica da orquestração, o relatório agora separa consumo, chamadas e tempo de implementação e verificação. A comparação com Sol direto exige medições externas no mesmo commit e plano:
+
+```bash
+codex-orchestrator --repo /caminho/projeto benchmark RUN_ID_1 RUN_ID_2 --direct-baseline direct-sol.json
+```
+
+O arquivo `direct-sol.json` tem formato `{"version":1,"baseline_commit":"<commit>","plan_sha256":"<hash>","source":"direct-sol","trials":[{"approved":true,"tokens":1000,"seconds":28.5,"cost_usd":"0.01","evidence":"log-1"},{"approved":false,"tokens":1200,"seconds":35.0,"cost_usd":"0.02","evidence":"log-2"}]}`. `cost_usd` aceita `null` quando desconhecido; nesse caso não existe comparativo monetário. Evidências externas são autodeclaradas até passarem por revisão independente; nenhum resultado real é fabricado.
 
 O benchmark exige o mesmo commit-base e hash do plano; mede gates aprovados,
 intervalos estatísticos, revisões, mutações detectadas, tokens e custos reais

@@ -20,6 +20,35 @@ class MutationQualityTests(ProjectCase):
         self.assertTrue(Path(task["mutation_proof"]["path"]).is_file())
         self.assertTrue(gate(self.root, state["id"])["approved"])
 
+    def test_behavioral_file_replacement_rejects_bad_artifact(self):
+        self.plan["tasks"][0]["test_contract"]["mutations"] = [{
+            "strategy": "file_replacement", "file": "value.txt",
+            "content": "invalid result", "check": "unit",
+            "failure_marker": "AssertionError",
+        }]
+        self.flush()
+        state = self.execute()
+        self.assertEqual(state["status"], "approved")
+        self.assertTrue(gate(self.root, state["id"])["approved"])
+
+    def test_behavioral_file_replacement_detects_surviving_mutant(self):
+        self.plan["tasks"][0]["test_contract"]["mutations"] = [{
+            "strategy": "file_replacement", "file": "value.txt",
+            "content": "okay", "check": "unit",
+            "failure_marker": "AssertionError",
+        }]
+        self.flush()
+        self.blocked("ok", "survived")
+
+    def test_behavioral_mutation_schema_prevents_mixed_strategies(self):
+        self.plan["tasks"][0]["test_contract"]["mutations"] = [{
+            "strategy": "file_replacement", "file": "value.txt",
+            "find": "ok", "content": "bad", "check": "unit",
+            "failure_marker": "AssertionError",
+        }]
+        with self.assertRaisesRegex(OrchestratorError, "forbids find/replace"):
+            validate_plan(self.plan, self.cfg["checks"])
+
     def test_critical_requires_preapproved_mutant_before_model_call(self):
         self.signer()
         self.plan["tasks"][0].update(risk_tags=["auth"], adversarial_checks=["negative"])

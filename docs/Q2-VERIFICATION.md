@@ -27,11 +27,11 @@ https://help.openai.com/en/articles/8264644-setting-up-and-managing-prepaid-api-
 ## 2. Qualidade: provar sensibilidade do oráculo, não presumir equivalência
 
 A versão 0.3 adiciona *mutation probes* ao contrato pré-aprovado pelo Astra.
-Cada mutação declara arquivo, substituição exata, check e uma assinatura
+Cada mutação declara arquivo, perturbação aprovada, check e uma assinatura
 identificável da falha esperada. Após os testes verdes, o controlador:
 
 1. cria uma Git worktree descartável a partir da revisão corrente;
-2. copia apenas o diff do candidato e aplica UMA mutação determinada pela Spec;
+2. copia apenas o diff do candidato e aplica UMA mutação determinada pela Spec (`file_replacement` ou `exact_replace`);
 3. executa o check de aceite protegido sem credenciais de modelo;
 4. exige uma falha **com a mensagem específica** que demonstra a regressão;
 5. guarda logs verificáveis vinculados ao snapshot e destrói a worktree mutante.
@@ -97,3 +97,7 @@ controle de variáveis, inspeção de defeitos e avaliação humana independente
 | Modelos | Smoke opt-in implementado e testado com fake | Login, permissões e execução autenticada real |
 
 Nunca classifique uma simulação (`tests/fake_codex.py`) como teste com modelos reais.
+
+### Mutações independentes do texto gerado
+
+Prefira `{"strategy":"file_replacement","file":"value.txt","content":"bad","check":"unit","failure_marker":"AssertionError"}`: o contraexemplo é pré-aprovado, não depende de encontrar substrings no código executado e deve provocar falha sem alterar o runner. Para fonte executável, o contraexemplo deve manter interface e sintaxe válidas. `exact_replace` continua compatível com planos antigos, mas é frágil quando o modelo muda a implementação.

@@ -50,9 +50,14 @@ def probe_mutations(engine, task: dict, work: Path) -> dict | None:
                     text = path.read_text(encoding="utf-8")
                 except (UnicodeError, OSError) as exc:
                     raise OrchestratorError("Mutation target must be a UTF-8 source file") from exc
-                if text.count(mutation["find"]) != 1:
-                    raise OrchestratorError(f"Mutation {index} for {task['id']} does not match exactly once")
-                path.write_text(text.replace(mutation["find"], mutation["replace"], 1), encoding="utf-8")
+                if mutation.get("strategy") == "file_replacement":
+                    # Pre-approved bad behavior is independent of the generated text.
+                    mutant_text = mutation["content"]
+                else:
+                    if text.count(mutation["find"]) != 1:
+                        raise OrchestratorError(f"Mutation {index} for {task['id']} does not match exactly once")
+                    mutant_text = text.replace(mutation["find"], mutation["replace"], 1)
+                path.write_text(mutant_text, encoding="utf-8")
                 if path.read_bytes() == (work / mutation["file"]).read_bytes():
                     raise OrchestratorError("Mutation did not change behavior candidate")
                 ok, checks = engine.check(checkout, [mutation["check"]], f"mutation-{task['id']}-{index}")
