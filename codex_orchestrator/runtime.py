@@ -749,6 +749,7 @@ def report(state: dict) -> dict:
     return {"run_id": state["id"], "status": state["status"], "error": state.get("error"),
             "branch": state["branch"], "worktree": state["worktree"],
             "tasks": {k: {"status": t["status"], "tier": t["tier"], "risk": t["risk"]["tags"],
+                          "skills": t.get("skills", {"required": [], "recommended": []}),
                           "worktree": t.get("worktree")} for k, t in state["tasks"].items()},
             "checkpoints_passed": len(state["checkpoints"]), "usage_by_role_and_stage": totals,
             "budget_mode": "observed: admission ceilings, not guaranteed provider billing caps"}
