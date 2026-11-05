@@ -220,7 +220,7 @@ class Engine:
                          adversarial_checks=task["adversarial_checks"], depends_on=[], parent_id=task["id"])
             validate_task(child, self.config["checks"])
             child = new_task(child, task["ancestors"])
-            route(child, assess(child, self.config, work, inherited=task["risk"]["tags"]))
+            route(child, assess(child, self.config, work, inherited=(task["risk"]["tags"] if task["risk"]["critical"] else ())))
             if ROLES.index(child["tier"]) >= ROLES.index(task["tier"]):
                 raise OrchestratorError("Risk floor forbids lower-tier delegation; implement at the required tier")
             require_verification(child, self.config)
