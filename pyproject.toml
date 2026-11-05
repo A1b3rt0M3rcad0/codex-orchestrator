@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codex-orchestrator"
-version = "0.2.0"
+version = "0.3.0"
 description = "Policy-enforced Codex skill, hooks and hierarchical review workflows"
 readme = "README.md"
 requires-python = ">=3.11"

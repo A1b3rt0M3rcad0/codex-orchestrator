@@ -20,7 +20,7 @@ DEFAULTS = {
                 "mode": "observed", "model_tokens": {}},
     "prices": {},
     "policy": {"extra_patterns": [], "minimum_tier": "luna"},
-    "verification": {"trusted_signers": "", "require_human": "critical"},
+    "verification": {"trusted_signers": "", "require_human": "critical", "mutation_policy": "critical"},
 }
 
 def money(value, allow_empty=False) -> Decimal | None:
@@ -119,6 +119,8 @@ def load_config(root: Path) -> dict:
     if not isinstance(p["extra_patterns"], list) or any(not isinstance(x, str) or not x for x in p["extra_patterns"]):
         raise OrchestratorError("policy.extra_patterns must contain non-empty glob strings")
     v = cfg["verification"]
+    if v["mutation_policy"] not in {"optional", "critical", "all"}:
+        raise OrchestratorError("verification.mutation_policy must be optional, critical or all")
     if v["require_human"] not in {"critical", "all"}:
         raise OrchestratorError("Human verification cannot be disabled for critical changes")
     if not isinstance(v["trusted_signers"], str) or "\0" in v["trusted_signers"]:

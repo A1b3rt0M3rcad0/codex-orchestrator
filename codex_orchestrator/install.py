@@ -56,6 +56,7 @@ extra_patterns = [] # additive critical path globs; built-in rules cannot be rem
 
 [verification]
 require_human = "critical" # or "all"; a model cannot approve this gate
+mutation_policy = "critical" # critical (default), all, optional
 trusted_signers = "" # absolute JSON Ed25519 public-key allowlist outside the repository
 
 [checks]

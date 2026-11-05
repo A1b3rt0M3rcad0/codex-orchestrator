@@ -2,7 +2,7 @@
 
 **Skill, hooks e controlador determinístico para implementar com Luna/Terra/Sol, revisar no nível seguinte e validar a entrega com Astra.**
 
-Versão **0.2.0 — Q1 hardening**. Python 3.11+, biblioteca padrão no runtime. O roteamento é código, não uma sequência de modelos encaminhando mensagens. Uma tarefa Luna não atravessa Sol e Terra antes de começar.
+Versão **0.3.0 — Q1 hardening + Q2 verificação baseada em evidências**. Python 3.11+, biblioteca padrão no runtime. O roteamento é código, não uma sequência de modelos encaminhando mensagens. Uma tarefa Luna não atravessa Sol e Terra antes de começar.
 
 > **Validação:** a suíte executa processos, Git, worktrees, checks, persistência e assinaturas criptográficas reais; somente o serviço Codex é substituído por um CLI de teste. Isso não é um benchmark de qualidade nem um smoke test com modelos autenticados. Veja [VALIDATION.md](docs/VALIDATION.md).
 
@@ -20,6 +20,7 @@ Versão **0.2.0 — Q1 hardening**. Python 3.11+, biblioteca padrão no runtime.
 - [Hooks, evidências e recuperação](#hooks-evidências-e-recuperação)
 - [Migração da 0.1](#migração-da-01)
 - [Testes e demonstração](#testes-e-demonstração)
+- [Validação independente e comparação de qualidade](#validação-independente-e-comparação-de-qualidade)
 - [Limites explícitos](#limites-explícitos)
 - [Estrutura e documentação oficial](#estrutura-e-documentação-oficial)
 
@@ -62,7 +63,7 @@ Astra: plano + revisão prévia do contrato de testes
 | 7. Pontos cegos correlacionados | Revisão sem narrativa do executor; para mudanças críticas, revisão adversarial separada, checks negativos e aprovação externa assinada. |
 | 8. Revisão redundante | Cápsulas vinculadas à spec, arquivos lidos/alterados, base, snapshot, modelo, logs e resposta; reuso somente enquanto válidas. |
 
-**Dois limites não são escondidos:** modelos da mesma família não se tornam estatisticamente independentes por rodarem em contextos separados. E limites observados do CLI não são um teto absoluto da fatura do provedor. Há controles compensatórios e comportamento fail-closed, detalhados abaixo.
+**Os limites do provedor não são escondidos nem falsamente declarados resolvidos:** modelos da mesma família não se tornam estatisticamente independentes por rodarem em contextos separados. E limites observados do CLI não são um teto absoluto da fatura do provedor. Há controles compensatórios e comportamento fail-closed, detalhados abaixo.
 
 ## Instalação
 
@@ -117,6 +118,7 @@ extra_patterns = ["src/finance/*", "src/tenant_boundary/*"]
 
 [verification]
 require_human = "critical"
+mutation_policy = "critical" # ou all / optional
 trusted_signers = ""
 
 [checks]
@@ -182,6 +184,20 @@ Exemplo completo: [examples/demo.plan.json](examples/demo.plan.json).
 ```
 
 Cada critério precisa de mapeamento a pelo menos um check. `baseline` é `pass` ou `fail`, com justificativa; falha esperada deve ser um contraexemplo conhecido, não runner quebrado. Todos os campos são obrigatórios. Critérios e checks de filhos são subconjuntos do contrato já revisado: um executor não pode inventar um novo oráculo permissivo.
+
+Para alterações críticas, `test_contract.mutations` é obrigatório por padrão:
+
+```json
+"mutations": [{"file":"src/textutil.py","find":"return value.strip()","replace":"return value","check":"acceptance","failure_marker":"AssertionError"}]
+```
+
+O controlador aplica cada mutação em uma worktree descartável **após os checks
+verdes**, exige que o teste de aceite falhe com o marcador previsto e grava
+prova vinculada ao snapshot. Um mutante sobrevivente, timeout ou falha por motivo
+errado bloqueia o fluxo. Use `mutation_policy = "all"` para exigir o mecanismo
+em toda tarefa, ou `"optional"` para permitir tarefas sem sondas. A mutação é
+especificada antes de executar qualquer modelo, junto ao contrato revisado pelo
+Astra. Veja [Q2-VERIFICATION.md](docs/Q2-VERIFICATION.md).
 
 `scope` é permissão de escrita; `reads` declara dependências relevantes ao scheduler e ao reuso de revisões. Use arquivos exatos ou prefixos terminados em `/`, nunca globs. Arquivos de controle e todos os testes principais são protegidos contra escrita, inclusive por outras tarefas.
 
@@ -400,6 +416,39 @@ codex-orchestrator gate RUN_ID
 ```
 
 Os testes do exemplo falham no baseline por comportamento não implementado. Sem Codex autenticado, não há smoke test real. `doctor` passando, testes simulados passando e assinatura válida não demonstram qualidade dos modelos.
+
+## Validação independente e comparação de qualidade
+
+O harness agora possui um verificador de **sensibilidade do teste de aceite**.
+Os testes principais precisam detectar regressões especificadas anteriormente
+pelo autor da Spec, não apenas retornar sucesso. Logs e sondas são guardados com
+hash e revisados na cápsula; alterações críticas exigem esse controle mais
+revisão adversarial e aprovação humana assinada.
+
+Para verificar os **modelos reais configurados**, sem alterar código, execute
+apenas quando desejar consumir chamadas do Codex:
+
+```bash
+codex-orchestrator --repo /caminho/projeto smoke-models --acknowledge-paid-requests
+```
+
+O smoke verifica o acesso e a saída estruturada dos quatro modelos. **Não é um
+teste E2E do fluxo.** Depois execute o exemplo do README em um repositório
+temporário com modelos autenticados, e confira o `gate` final.
+
+Para comparar qualidade/custo de múltiplas execuções idênticas:
+
+```bash
+codex-orchestrator --repo /caminho/projeto benchmark RUN_ID_1 RUN_ID_2
+```
+
+O benchmark exige o mesmo commit-base e hash do plano; mede gates aprovados,
+intervalos estatísticos, revisões, mutações detectadas, tokens e custos reais
+reportados. **Não inventa notas de 0–100 nem infere qualidade idêntica entre
+modelos.** Amostras pequenas recebem a classificação `exploratory`.
+
+A matriz de propriedades verificáveis e dependências externas está em
+[docs/Q2-VERIFICATION.md](docs/Q2-VERIFICATION.md).
 
 ## Limites explícitos
 

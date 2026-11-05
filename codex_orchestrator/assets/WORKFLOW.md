@@ -122,3 +122,21 @@ reviewer signs with an Ed25519 key using OpenSSL 3+. `approve` verifies against 
 public-key allowlist pinned when the run started. Wrong signer, wrong run, altered
 code/config/evidence and replay of stale statements are rejected. The controller
 never generates or consumes private keys.
+
+
+## Q2: Mutation sensitivity, real-model smoke and comparative reports
+
+`test_contract` optionally contains `mutations`: array of `{file, find, replace,
+check, failure_marker}`. Every mutation must target exactly one existing
+implementation-file span, belong to the approved check list and trigger a
+recognizable assertion on a throwaway worktree. Surviving mutants, wrong failure
+reasons and missing/stale probe evidence are NOT approvals. A mutation probe
+cannot edit the accepted candidate, test oracle or Git state. The default
+`verification.mutation_policy = critical` requires declared mutants for
+critical work; `all` requires them for every task, `optional` explicitly relaxes.
+
+`smoke-models --acknowledge-paid-requests` calls each configured model in a
+read-only isolated CLI request, checking JSON schema and usage; it does not
+validate code or hooks. `benchmark RUN_IDS...` compares only identical plans
+and base commits. It reports observed outcomes, uncertainty and usage, never
+a fictitious quality score or a remote billing guarantee. See docs/Q2-VERIFICATION.md.

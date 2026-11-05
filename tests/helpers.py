@@ -109,6 +109,9 @@ class ProjectCase(unittest.TestCase):
         self.signer()
         self.plan["tasks"][0]["risk_tags"] = ["auth"]
         self.plan["tasks"][0]["adversarial_checks"] = ["negative"]
+        self.plan["tasks"][0]["test_contract"]["mutations"] = [{
+            "file": "value.txt", "find": "ok", "replace": "bad", "check": "unit",
+            "failure_marker": "AssertionError"}]
         self.flush()
 
     def second_task(self, depends=False):

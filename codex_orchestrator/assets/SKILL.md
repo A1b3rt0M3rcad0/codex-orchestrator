@@ -3,7 +3,7 @@ name: codex-orchestrator
 description: Implement a reviewed plan using risk-aware Luna/Terra/Sol execution, hierarchical review, protected acceptance tests, deterministic checkpoints and budget gates. Use when the user requests multi-model implementation or the codex-orchestrator workflow.
 ---
 
-# Codex Orchestrator — Q1 / v0.2
+# Codex Orchestrator — Q1+ / v0.3
 
 Use the installed `codex-orchestrator` controller; never simulate its state machine
 in conversation. Read `references/workflow.md` for the exact contract and gates.
@@ -15,6 +15,9 @@ in conversation. Read `references/workflow.md` for the exact contract and gates.
    tests in committed files **before implementation**. Tests must not derive
    expected values from the implementation or be writable by executors. A failing
    baseline must be a known counterexample, not a broken runner/import.
+   Critical tasks must define independent pre-approved `test_contract.mutations`
+   demonstrating that at least one named regression makes acceptance tests fail.
+   Mutant fixtures and failure signatures must be chosen BEFORE execution.
 3. Configure real check commands in `orchestrator.toml`: local checks, partial-
    integration smoke checks and final E2E as appropriate. Critical changes need
    adversarial checks and the operator's external public-key allowlist. Never
@@ -22,6 +25,9 @@ in conversation. Read `references/workflow.md` for the exact contract and gates.
 4. Respect project permission/commit conventions. The source, plan/config and test
    setup must be committed before `run`; never discard the user's uncommitted work.
    Run `doctor` and `validate PLAN.json`. Doctor does not prove model access.
+   For an explicitly authorized paid capability check, run `smoke-models
+   --acknowledge-paid-requests` in an authenticated session; never silently
+   call models or present a fake smoke as an authenticated run.
 5. Run `codex-orchestrator run PLAN.json --session-id SESSION_ID` when the actual
    SessionStart hook supplies an id; omit the option if no id is available. Do not
    invent an id. The caller must authorize Git/worktree/process permissions.
@@ -40,6 +46,8 @@ Default mapping: Luna → Terra review; Terra → Sol review; Sol → Astra revi
 Risk policy can raise the executor/reviewer even when the plan says `luna`.
 Astra reviews the acceptance contract first and the assembled delivery at the end.
 
+Use `benchmark RUN_ID ...` on repeated runs sharing the same plan/base to measure
+cost and acceptance objectively; do not claim statistical equivalence from one run.
 Optimize **verified delivery**, not an invented quality score. Reuse valid capsule
 references and compact handoffs, not full conversations. Unknown telemetry is a
 blocker. Observed CLI limits are not a hard provider billing guarantee.
