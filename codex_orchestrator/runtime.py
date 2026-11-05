@@ -21,6 +21,7 @@ from .evidence import (approval_payload, artifact, capsule_fresh, compact_capsul
                        verify_human)
 from .model import Model
 from .quality import probe_mutations
+from .skills import discover, validate_bindings, verify_catalog
 from .policy import assess, guard, require_verification, route, seal
 from .system import (argv_expand, atomic_json, changed, command, commit, diff_bytes,
                      enforce_scope, exclusive, file_hash, git, load_config, repo_root,
@@ -57,7 +58,8 @@ class Engine:
         self.work, self.config = Path(state["worktree"]), state["config"]
         self.lock, self.cancel = threading.RLock(), threading.Event()
         self.ledger = Ledger(self.config, state["calls"], self.lock, self.persist)
-        self.model = Model(self.config, directory, self.ledger, self.lock, self.persist, self.cancel)
+        self.model = Model(self.config, directory, self.ledger, self.lock, self.persist,
+                           self.cancel, state.get("skill_catalog", {}))
 
     def persist(self):
         with self.lock:
@@ -165,8 +167,13 @@ class Engine:
         task = {"id": "contract", "objective": "Validate the independent acceptance-test contracts BEFORE implementation.",
                 "acceptance": [f"{t['id']}: test cases faithfully cover every acceptance criterion and explain baseline results."
                                for t in self.state["tasks"].values()], "ancestors": ["contract"]}
+        selected = {name for t in self.state["tasks"].values()
+                    for name in (t.get("skills", {}).get("required", []) +
+                                 t.get("skills", {}).get("recommended", []))}
         result, ref = self.review("contract", "astra", task, self.work, evidence,
-                                  plan=artifact(self.directory / "plan.json"), sealed=self.state["sealed"])
+                                  plan=artifact(self.directory / "plan.json"), sealed=self.state["sealed"],
+                                  reviewed_skills={name: self.state.get("skill_catalog", {})[name]
+                                                   for name in sorted(selected)})
         if result["decision"] != "approve":
             raise OrchestratorError("Test/spec contract was not approved; replan before implementation")
         self.state["contract_proof"] = ref
@@ -214,6 +221,19 @@ class Engine:
                 raise OrchestratorError("Child omitted required acceptance checks")
             mutations = [m for m in task["test_contract"].get("mutations", [])
                          if in_scope(m["file"], child["scope"]) and m["check"] in child["checks"]]
+            parent_skills = task.get("skills")
+            requested_skills = child.get("skills")
+            if requested_skills and not parent_skills:
+                raise OrchestratorError("Child cannot introduce unreviewed skills")
+            if parent_skills:
+                if requested_skills is None:
+                    child["skills"] = copy.deepcopy(parent_skills)
+                else:
+                    if not set(parent_skills["required"]) <= set(requested_skills["required"]):
+                        raise OrchestratorError("Delegation cannot drop required skills")
+                    approved = set(parent_skills["required"] + parent_skills["recommended"])
+                    if not set(requested_skills["required"] + requested_skills["recommended"]) <= approved:
+                        raise OrchestratorError("Child cannot introduce unreviewed skills")
             child.update(id=safe_id(task["id"] + "." + child["id"]),
                          test_contract={"files": task["test_contract"]["files"], "cases": cases,
                                         **({"mutations": mutations} if mutations else {})},
@@ -619,6 +639,10 @@ def run(root: Path, plan_path: Path | None = None, run_id: str | None = None, se
                 raise OrchestratorError("v1 runs cannot be resumed with v2; finish using v0.1 or create a reviewed v2 plan")
             if digest(state["plan"]) != state["plan_hash"]:
                 raise OrchestratorError("Persisted plan changed")
+            if state.get("skill_catalog"):
+                if state.get("skill_catalog_sha256") != digest(state["skill_catalog"]):
+                    raise OrchestratorError("Persisted skill catalog changed")
+                verify_catalog(Path(state["worktree"]), state["skill_catalog"])
             if state["status"] in {"approved", "awaiting_human"}:
                 validate_delivery(state, require_signature=state["status"] == "approved")
                 return state
@@ -636,6 +660,8 @@ def run(root: Path, plan_path: Path | None = None, run_id: str | None = None, se
                 raise OrchestratorError("Initial plan exceeds task budget")
             if changed(root):
                 raise OrchestratorError("Commit your configuration, independent tests and source before starting a run")
+            skill_catalog = discover(root)
+            validate_bindings(plan, skill_catalog)
             sealed = seal(root, plan, cfg)
             tasks = {t["id"]: new_task(t) for t in plan["tasks"]}
             for task in tasks.values():
@@ -662,6 +688,7 @@ def run(root: Path, plan_path: Path | None = None, run_id: str | None = None, se
             state = {"version": 2, "id": ident, "root": str(root), "worktree": str(work), "workspace_root": str(location),
                      "branch": branch, "base": base, "status": "pending", "created_at": now(), "config": cfg,
                      "plan": plan, "plan_hash": digest(plan), "sealed": sealed, "tasks": tasks,
+                     "skill_catalog": skill_catalog, "skill_catalog_sha256": digest(skill_catalog),
                      "calls": [], "events": [], "review_cache": {}, "attempt_totals": {}, "global_round": 0,
                      "checkpoints": [], "checkpoint_repairs": {}, "since_checkpoint": 0, "checkpoint_due": False,
                      "integration_checkpoint": snapshot(work), "approval_nonce": uuid.uuid4().hex,

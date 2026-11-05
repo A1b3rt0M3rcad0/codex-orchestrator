@@ -22,7 +22,7 @@ def main(argv=None) -> int:
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     subs = parser.add_subparsers(dest="command", required=True)
-    for name in ("install", "doctor", "list", "hooks", "migrate-config"):
+    for name in ("install", "doctor", "list", "skills", "hooks", "migrate-config"):
         subs.add_parser(name)
     validate = subs.add_parser("validate")
     validate.add_argument("plan", type=Path)
@@ -64,7 +64,11 @@ def main(argv=None) -> int:
             result = {"backup": migrate_config(args.repo), "next": "Review new policy, then prepare a v2 test contract; plans are not guessed automatically."}
         else:
             root = repo_root(args.repo)
-            if args.command == "benchmark":
+            if args.command == "skills":
+                from .skills import discover
+                result = {"source": ".agents/skills (Git-tracked project skills only)",
+                          "skills": list(discover(root).values())}
+            elif args.command == "benchmark":
                 result = benchmark(root, args.run_ids, direct_baseline=args.direct_baseline)
             elif args.command == "smoke-models":
                 result = smoke_models(root, load_config(root), args.roles,
@@ -85,12 +89,16 @@ def main(argv=None) -> int:
             elif args.command == "validate":
                 cfg, plan = load_config(root), read_json(args.plan)
                 validate_plan(plan, cfg["checks"])
+                from .skills import discover, validate_bindings
+                catalog = discover(root)
+                validate_bindings(plan, catalog)
                 seal(root, plan, cfg)
                 tasks = []
                 for task in plan["tasks"]:
                     route(task, assess(task, cfg, root))
                     require_verification(task, cfg)
-                    tasks.append({"id": task["id"], "tier": task["tier"], "risk": task["risk"]})
+                    tasks.append({"id": task["id"], "tier": task["tier"], "risk": task["risk"],
+                                  "skills": task.get("skills", {"required": [], "recommended": []})})
                 result = {"valid": True, "tasks": tasks}
             elif args.command in {"run", "resume"}:
                 state = run(root, plan_path=args.plan if args.command == "run" else None,

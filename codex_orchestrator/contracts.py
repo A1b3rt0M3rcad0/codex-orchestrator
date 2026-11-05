@@ -40,7 +40,8 @@ STRINGS = array(TEXT, 1)
 TASK_FIELDS = {"id": TEXT, "tier": {"type": "string", "enum": list(ROLES)},
                "objective": TEXT, "scope": STRINGS, "reads": array(TEXT),
                "acceptance": STRINGS, "checks": STRINGS, "risk_tags": array(TEXT)}
-CHILD_SCHEMA = obj(TASK_FIELDS)
+SKILLS_SCHEMA = obj({"required": array(TEXT, 0, 12), "recommended": array(TEXT, 0, 12)})
+CHILD_SCHEMA = obj({**TASK_FIELDS, "skills": SKILLS_SCHEMA}, optional=("skills",))
 MUTATION = obj({"file": TEXT, "check": TEXT, "failure_marker": TEXT,
                 "strategy": {"type": "string", "enum": ["exact_replace", "file_replacement"]},
                 "find": TEXT, "replace": TEXT, "content": TEXT},
@@ -49,7 +50,7 @@ TEST_CONTRACT = obj({"files": STRINGS, "cases": array(obj({"criterion": TEXT, "c
                     "baseline": {"type": "string", "enum": ["pass", "fail"]}, "rationale": TEXT}), 1),
                     "mutations": array(MUTATION, 1, 16)}, optional=("mutations",))
 TASK_SCHEMA = obj({**TASK_FIELDS, "depends_on": array(TEXT), "test_contract": TEST_CONTRACT,
-                   "adversarial_checks": array(TEXT)})
+                   "adversarial_checks": array(TEXT), "skills": SKILLS_SCHEMA}, optional=("skills",))
 PLAN_SCHEMA = obj({"version": {"type": "integer", "enum": [2]}, "objective": TEXT,
                    "acceptance": STRINGS, "integration_checks": STRINGS, "checkpoint_checks": STRINGS,
                    "tasks": array(TASK_SCHEMA, 1)})
@@ -128,6 +129,14 @@ def validate_task(task: dict, checks: dict) -> None:
         safe_path(item)
     for item in task["reads"]:
         safe_path(item, protected=False)
+    binding = task.get("skills")
+    if binding is not None:
+        required, recommended = binding["required"], binding["recommended"]
+        all_skills = required + recommended
+        if len(set(all_skills)) != len(all_skills):
+            raise OrchestratorError("Task skills must be unique across required and recommended")
+        for name in all_skills:
+            safe_id(name)
     if len(set(task["acceptance"])) != len(task["acceptance"]):
         raise OrchestratorError("Acceptance criteria must be unique")
     if not set(task["checks"]).issubset(checks):
