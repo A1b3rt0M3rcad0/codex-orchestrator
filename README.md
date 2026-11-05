@@ -442,6 +442,14 @@ Para comparar qualidade/custo de múltiplas execuções idênticas:
 codex-orchestrator --repo /caminho/projeto benchmark RUN_ID_1 RUN_ID_2
 ```
 
+Para medir a contribuição econômica da orquestração, o relatório agora separa consumo, chamadas e tempo de implementação e verificação. A comparação com Sol direto exige medições externas no mesmo commit e plano:
+
+```bash
+codex-orchestrator --repo /caminho/projeto benchmark RUN_ID_1 RUN_ID_2 --direct-baseline direct-sol.json
+```
+
+O arquivo `direct-sol.json` tem formato `{"version":1,"baseline_commit":"<commit>","plan_sha256":"<hash>","source":"direct-sol","trials":[{"approved":true,"tokens":1000,"seconds":28.5,"cost_usd":"0.01","evidence":"log-1"},{"approved":false,"tokens":1200,"seconds":35.0,"cost_usd":"0.02","evidence":"log-2"}]}`. `cost_usd` aceita `null` quando desconhecido; nesse caso não existe comparativo monetário. Evidências externas são autodeclaradas até passarem por revisão independente; nenhum resultado real é fabricado.
+
 O benchmark exige o mesmo commit-base e hash do plano; mede gates aprovados,
 intervalos estatísticos, revisões, mutações detectadas, tokens e custos reais
 reportados. **Não inventa notas de 0–100 nem infere qualidade idêntica entre
