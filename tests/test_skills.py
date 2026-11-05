@@ -37,7 +37,7 @@ class SkillBindingTests(ProjectCase):
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(main(["--repo", str(self.root), "skills"]), 0)
         self.assertEqual(json.loads(out.getvalue())["skills"][0]["name"], "tdd")
-        p.write_text("uncommitted modification")
+        p.write_text(p.read_text() + "\n# Modified after commit\n")
         self.assertNotEqual(discover(self.root)["tdd"]["sha256"], catalog["tdd"]["sha256"])
 
     def test_skills_require_commit_and_reject_symlinks(self):
