@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codex-orchestrator"
-version = "0.1.0"
-description = "Deterministic Codex skill, hooks and hierarchical implementation/review workflows"
+version = "0.2.0"
+description = "Policy-enforced Codex skill, hooks and hierarchical review workflows"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
@@ -17,4 +17,4 @@ codex-orchestrator = "codex_orchestrator.cli:main"
 include = ["codex_orchestrator*"]
 
 [tool.setuptools.package-data]
-codex_orchestrator = ["assets/*.md"]
+codex_orchestrator = ["assets/*.md", "assets/*.toml"]

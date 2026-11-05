@@ -1,20 +1,53 @@
 {
-  "version": 1,
-  "objective": "Normalizar nomes preservando as palavras e a capitalização.",
-  "acceptance": ["A API normalize_name passa todos os testes de regressão existentes."],
-  "integration_checks": ["unit"],
+  "version": 2,
+  "objective": "Normalizar rótulos conforme o contrato",
+  "acceptance": [
+    "A normalização atende aos casos de aceite"
+  ],
+  "integration_checks": [
+    "unit"
+  ],
+  "checkpoint_checks": [
+    "unit"
+  ],
   "tasks": [
     {
-      "id": "NAME-1",
+      "id": "TEXT-1",
       "tier": "luna",
-      "objective": "Corrigir normalize_name: remover espaços externos e reduzir sequências de whitespace a um espaço. Rejeitar entradas não string com TypeError.",
-      "scope": ["textutil.py"],
-      "acceptance": [
-        "Espaços externos são removidos e whitespace interno é normalizado sem alterar capitalização.",
-        "String vazia produz string vazia; entradas não string levantam TypeError."
+      "objective": "Implementar normalize_label",
+      "scope": [
+        "textutil.py"
       ],
-      "checks": ["unit"],
-      "depends_on": []
+      "reads": [],
+      "acceptance": [
+        "Espaços redundantes são normalizados",
+        "Valores não textuais geram TypeError"
+      ],
+      "checks": [
+        "unit"
+      ],
+      "depends_on": [],
+      "risk_tags": [],
+      "test_contract": {
+        "files": [
+          "tests/test_textutil.py"
+        ],
+        "cases": [
+          {
+            "criterion": "Espaços redundantes são normalizados",
+            "check": "unit",
+            "baseline": "fail",
+            "rationale": "A função está incompleta no baseline"
+          },
+          {
+            "criterion": "Valores não textuais geram TypeError",
+            "check": "unit",
+            "baseline": "fail",
+            "rationale": "O contrato de tipos ainda não foi implementado"
+          }
+        ]
+      },
+      "adversarial_checks": []
     }
   ]
 }
