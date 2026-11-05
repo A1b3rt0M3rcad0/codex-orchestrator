@@ -129,7 +129,7 @@ trusted_signers = ""
 # adversarial = ["npm", "run", "test:negative"]
 ```
 
-`{python}` significa o interpretador do controlador. Comandos são arrays de argumentos, sem shell implícito. Formatadores precisam estar em modo check. Dependências, bancos de teste e serviços devem existir nas worktrees; o controlador não instala nem inventa esses serviços. Para executar em paralelo, os próprios checks precisam isolar bancos, portas e arquivos externos — worktrees não isolam recursos fora do checkout.
+Os testes, manifests/lockfiles e configurações comuns de runners são selados automaticamente. Para dependências personalizadas de checks, configure `verification.protected_paths = ["checks/support/", "fixtures/contract.json"]` (caminhos exatos ou prefixos de diretório rastreados no Git). O gate detecta também arquivos de suporte novos introduzidos após a selagem. Alterações legítimas a esses arquivos exigem atualizar o contrato antes da execução.\n\n`{python}` significa o interpretador do controlador. Comandos são arrays de argumentos, sem shell implícito. Formatadores precisam estar em modo check. Dependências, bancos de teste e serviços devem existir nas worktrees; o controlador não instala nem inventa esses serviços. Para executar em paralelo, os próprios checks precisam isolar bancos, portas e arquivos externos — worktrees não isolam recursos fora do checkout.
 
 Os papéis configuráveis padrão são:
 
@@ -144,7 +144,7 @@ Cada `[models.PAPEL]` permite `model`, `effort`, `review_effort` e `family`. Nã
 
 ### Política de risco
 
-Auth/autorização/tenancy, pagamentos, migrations, concorrência, segredos e infraestrutura possuem detectores embutidos. A análise usa metadados, caminhos reais sob os escopos, conteúdo e diff, inclusive exclusões. Tags declaradas, regras adicionais e conteúdo binário/grande também podem elevar a classificação. O piso crítico é **Sol implementa → Astra revisa**, com verificação adversarial e assinatura externa.
+Auth/autorização/tenancy, pagamentos, migrations, concorrência, segredos e infraestrutura possuem detectores embutidos. Nomes de caminhos e intenção textual são **indícios** que impõem piso Terra, sem aprovação humana automática. O diff com linhas materiais de código em área sensível, tags críticas declaradas/herdadas, regras explícitas do projeto ou conteúdo binário/opaco impõem piso **Sol implementa → Astra revisa**, com verificação adversarial e assinatura externa. Mudanças exclusivamente em comentários ou documentação não se tornam críticas só pelo nome do arquivo. Uma heurística lexical continua insuficiente para decidir todos os casos semânticos.
 
 Regras são monotônicas: o plano não desativa detectores e filhos não descartam o risco herdado. Uma descoberta após edição preserva o patch e exige reavaliação pelo executor superior. Regras de caminhos específicas do projeto devem complementar os detectores; nenhuma heurística lexical garante descobrir todo risco semântico.
 
