@@ -137,6 +137,16 @@ class SkillBindingTests(ProjectCase):
         self.assertEqual(child_calls[0]["request"]["skill_context"]["required"][0]["name"], "tdd")
         self.assertTrue(gate(self.root, state["id"])["approved"])
 
+    def test_child_cannot_invent_or_drop_required_skills(self):
+        self.add_skill()
+        self.bind(required=["tdd"])
+        self.plan["tasks"][0]["tier"] = "terra"
+        self.flush()
+        self.blocked("delegate-skill-invent", "unreviewed skills")
+        # Restart from the same committed fixture to test a distinct invalid
+        # child declaration without relying on a resumed blocked run.
+        self.blocked("delegate-skill-drop", "cannot drop required skills")
+
     def test_required_skill_larger_than_prompt_allowance_blocks(self):
         self.add_skill(body="Use tests.\n" * 5000)
         self.bind(required=["tdd"])
