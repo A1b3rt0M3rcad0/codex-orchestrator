@@ -44,13 +44,17 @@ if scenario == "parallel" and mode == "implement":
 
 if mode == "implement":
     result = {"status": "implemented", "summary": "Simulated implementation for controller tests.", "children": []}
-    if scenario in {"delegate", "delegate-twice", "delegate-escape", "delegate-oracle", "risk-launder"} and role in {"sol", "terra"} and (not req.get("children") or scenario == "delegate-twice"):
+    if scenario in {"delegate", "delegate-twice", "delegate-escape", "delegate-oracle", "risk-launder", "delegate-skill-invent", "delegate-skill-drop"} and role in {"sol", "terra"} and (not req.get("children") or scenario == "delegate-twice"):
         child = {k: task[k] for k in ("objective", "scope", "reads", "acceptance", "checks")}
         child.update(id="child", tier="terra" if role == "sol" else "luna", risk_tags=[])
         if scenario == "delegate-escape":
             child["scope"] = ["outside.txt"]
         if scenario == "delegate-oracle":
             child["acceptance"] = ["A new unreviewed criterion"]
+        if scenario == "delegate-skill-invent":
+            child["skills"] = {"required": ["tdd", "unapproved"], "recommended": []}
+        if scenario == "delegate-skill-drop":
+            child["skills"] = {"required": [], "recommended": []}
         result.update(status="delegate", children=[child])
     elif scenario == "escalate" and role == "luna":
         result.update(status="blocked", summary="Tried the specified approach; counterexample prevents completion.")

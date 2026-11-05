@@ -9,7 +9,7 @@ from .contracts import OrchestratorError, canonical, digest, in_scope, read_json
 from .policy import guard
 from .system import atomic_json, command, file_hash, git, snapshot, tracked
 
-SPEC_KEYS = ("id", "objective", "scope", "reads", "acceptance", "checks", "test_contract", "adversarial_checks")
+SPEC_KEYS = ("id", "objective", "scope", "reads", "acceptance", "checks", "test_contract", "adversarial_checks", "skills")
 
 def contract(task: dict) -> dict:
     return {key: task[key] for key in SPEC_KEYS if key in task}
@@ -158,6 +158,8 @@ def validate_delivery(state: dict, require_signature=True) -> None:
     if digest(state["plan"]) != state["plan_hash"]:
         raise OrchestratorError("Plan changed after approval")
     guard(work, state["sealed"])
+    from .skills import verify_dispatches
+    verify_dispatches(state)
     verify_checks(state["global_checks"])
     if any(c["snapshot"] != state["approved_snapshot"] for c in state["global_checks"]):
         raise OrchestratorError("Global checks belong to another snapshot")
