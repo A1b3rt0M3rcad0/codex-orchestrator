@@ -213,7 +213,8 @@ Por padrão, `verification.mutation_policy = "critical"` exige **ao menos uma mu
 **Estratégia recomendada — `file_replacement`:** fornece uma implementação/artefato propositalmente incorreto, sem depender de uma substring da solução gerada.
 
 ```json
-"mutations": [
+{
+  "mutations": [
   {
     "strategy": "file_replacement",
     "file": "textutil.py",
@@ -221,7 +222,8 @@ Por padrão, `verification.mutation_policy = "critical"` exige **ao menos uma mu
     "check": "unit",
     "failure_marker": "AssertionError"
   }
-]
+  ]
+}
 ```
 
 O contraexemplo precisa continuar **sintática e estruturalmente válido** e representar uma regressão real; não basta fazer o teste falhar por importação quebrada ou ambiente ausente.
@@ -229,7 +231,8 @@ O contraexemplo precisa continuar **sintática e estruturalmente válido** e rep
 **Compatibilidade — `exact_replace`:** preserva planos antigos e substitui um trecho literal existente exatamente uma vez. É útil quando o código é estável, mas pode bloquear uma implementação correta que use outra expressão.
 
 ```json
-"mutations": [
+{
+  "mutations": [
   {
     "strategy": "exact_replace",
     "file": "textutil.py",
@@ -238,7 +241,8 @@ O contraexemplo precisa continuar **sintática e estruturalmente válido** e rep
     "check": "unit",
     "failure_marker": "AssertionError"
   }
-]
+  ]
+}
 ```
 
 O campo `strategy` é opcional para planos legados com `find` e `replace` (equivale a `exact_replace`). Para `file_replacement`, use `content`, sem `find`/`replace`. `mutation_policy = "all"` exige sondas em todas as tarefas; `"optional"` permite ausência de sondas, mas não desativa os demais gates críticos. Consulte [Q2-VERIFICATION.md](docs/Q2-VERIFICATION.md).
