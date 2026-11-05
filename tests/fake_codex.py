@@ -52,7 +52,7 @@ if mode == "implement":
         if scenario == "delegate-oracle":
             child["acceptance"] = ["A new unreviewed criterion"]
         if scenario == "delegate-skill-invent":
-            child["skills"] = {"required": ["unapproved"], "recommended": []}
+            child["skills"] = {"required": ["tdd", "unapproved"], "recommended": []}
         if scenario == "delegate-skill-drop":
             child["skills"] = {"required": [], "recommended": []}
         result.update(status="delegate", children=[child])
