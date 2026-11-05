@@ -40,8 +40,8 @@ def benchmark(root: Path, identifiers: list[str]) -> dict:
         grouped[key].append(state)
     results = []
     for key, runs in sorted(grouped.items()):
-        successes, cost_total, priced_successes = 0, Decimal(0), 0
-        accepted_cost, tokens, failed_checks, review_changes = Decimal(0), 0, 0, 0
+        successes, cost_total = 0, Decimal(0)
+        tokens, failed_checks, review_changes = 0, 0, 0
         unresolved_cost = 0
         mutation_killed, mutation_total = 0, 0
         for state in runs:
@@ -74,7 +74,11 @@ def benchmark(root: Path, identifiers: list[str]) -> dict:
                     except (OrchestratorError, OSError, ValueError, KeyError):
                         pass
         low, high = wilson(successes, len(runs))
-        results.append({"variant": key, "models": {role: v["model"] for role, v in runs[0]["config"]["models"].items()},
+        transport = runs[0]["config"]["runtime"]["command"]
+        results.append({"variant": key, "transport": transport,
+                        "simulated_backend_detected": any("fake_codex" in x or "codex-test" in x for x in transport),
+                        "remote_model_identity": "not cryptographically attested",
+                        "models": {role: v["model"] for role, v in runs[0]["config"]["models"].items()},
                         "efforts": {role: [v["effort"], v["review_effort"]] for role, v in runs[0]["config"]["models"].items()},
                         "run_ids": [s["id"] for s in runs], "trials": len(runs),
                         "verified_approvals": successes, "verified_approval_rate": round(successes / len(runs), 4),

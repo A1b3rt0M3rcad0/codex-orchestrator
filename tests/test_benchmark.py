@@ -20,6 +20,7 @@ class BenchmarkTests(ProjectCase):
         self.assertEqual(result["plan_sha256"], a["plan_hash"])
         self.assertEqual(len(result["variants"]), 1)
         row = result["variants"][0]
+        self.assertTrue(row["simulated_backend_detected"])
         self.assertEqual(row["verified_approvals"], 2)
         self.assertEqual(row["trials"], 2)
         self.assertEqual(row["reported_cost_usd"], None)

@@ -19,13 +19,17 @@ from .system import argv_expand, atomic_json, run_process, snapshot
 
 
 def smoke_models(root: Path, config: dict, roles: list[str], acknowledge: bool,
-                 timeout: int = 120) -> dict:
+                 timeout: int = 120, *, allow_simulated_backend: bool = False) -> dict:
     if not acknowledge:
         raise OrchestratorError("Smoke makes paid Codex requests; explicitly acknowledge paid model calls")
     if not 1 <= timeout <= 900:
         raise OrchestratorError("Smoke timeout must be between 1 and 900 seconds")
     if not roles or len(roles) != len(set(roles)) or any(r not in config["models"] for r in roles):
         raise OrchestratorError("Choose distinct configured model roles")
+    simulated = any("fake_codex" in item or "codex-test" in item
+                    for item in config["runtime"]["command"])
+    if simulated and not allow_simulated_backend:
+        raise OrchestratorError("Authenticated smoke refuses simulated/fake Codex backend")
     before = snapshot(root)
     checks = []
     with tempfile.TemporaryDirectory(prefix="co-live-smoke-") as folder:
@@ -82,7 +86,8 @@ def smoke_models(root: Path, config: dict, roles: list[str], acknowledge: bool,
             if snapshot(root) != before:
                 raise OrchestratorError("Read-only smoke changed repository; results rejected")
     return {"passed": len(checks) == len(roles), "roles": checks,
-            "transport": config["runtime"]["command"],
+            "transport": config["runtime"]["command"], "simulated_backend": simulated,
+            "authenticated_remote_identity": "not independently attested by CLI",
             "claims": ["Structured-output/availability smoke only; not an end-to-end execution or quality benchmark",
                        "Transport identity is not cryptographically proven by the smoke",
                        "Provider costs may exceed local token observations on interrupted/in-flight calls"]}
