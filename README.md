@@ -2,9 +2,9 @@
 
 **Skill, hooks e controlador determinístico para implementar com Luna/Terra/Sol, revisar no nível seguinte e validar a entrega com Astra.**
 
-Versão **0.3.0 — Q1 hardening + Q2 verificação baseada em evidências**. Python 3.11+, biblioteca padrão no runtime. O roteamento é código, não uma sequência de modelos encaminhando mensagens. Uma tarefa Luna não atravessa Sol e Terra antes de começar.
+**Versão do pacote: 0.3.0 · contrato de plano/configuração: v2.** A `master` incorpora os controles Q1/Q2 e as quatro melhorias consolidadas no [PR #7](https://github.com/A1b3rt0M3rcad0/codex-orchestrator/pull/7): observabilidade econômica, classificação de risco por alterações efetivas, mutações comportamentais e proteção ampliada do runner de testes. Python 3.11+, sem dependências externas em runtime. O controlador decide o roteamento diretamente; uma tarefa Luna não precisa passar por Sol e Terra para começar.
 
-> **Validação:** a suíte executa processos, Git, worktrees, checks, persistência e assinaturas criptográficas reais; somente o serviço Codex é substituído por um CLI de teste. Isso não é um benchmark de qualidade nem um smoke test com modelos autenticados. Veja [VALIDATION.md](docs/VALIDATION.md).
+> **Estado de validação:** a suíte automatizada exercita processos, Git, worktrees, verificações, persistência e assinaturas Ed25519 reais, mas substitui as chamadas aos modelos por `tests/fake_codex.py`. A aprovação da CI **não comprova execução autenticada, qualidade dos modelos nem economia monetária**. Para o procedimento de validação e seus limites, consulte [VALIDATION.md](docs/VALIDATION.md) e [Q2-VERIFICATION.md](docs/Q2-VERIFICATION.md).
 
 ## Índice
 
@@ -52,7 +52,7 @@ Astra: plano + revisão prévia do contrato de testes
               gate → branch/commit aprovado
 ```
 
-| Ponto auditado | Controle executável na v0.2 |
+| Ponto auditado | Controle presente na `master` |
 |---|---|
 | 1. Classificação errada | Pisos de risco por domínio, caminhos, código e diff; reavaliação após edição e herança em filhos/reparos. |
 | 2. Testes feitos para passar | Contrato de aceite anterior à implementação, checks reais de baseline, revisão prévia pelo Astra e arquivos de teste selados. |
@@ -118,8 +118,9 @@ extra_patterns = ["src/finance/*", "src/tenant_boundary/*"]
 
 [verification]
 require_human = "critical"
-mutation_policy = "critical" # ou all / optional
+mutation_policy = "critical" # ou "all" / "optional"
 trusted_signers = ""
+protected_paths = [] # adicione caminhos reais de suporte aos checks
 
 [checks]
 # Substitua pelos comandos reais do seu projeto:
@@ -129,9 +130,21 @@ trusted_signers = ""
 # adversarial = ["npm", "run", "test:negative"]
 ```
 
-Os testes, manifests/lockfiles e configurações comuns de runners são selados automaticamente. Para dependências personalizadas de checks, configure `verification.protected_paths = ["checks/support/", "fixtures/contract.json"]` (caminhos exatos ou prefixos de diretório rastreados no Git). O gate detecta também arquivos de suporte novos introduzidos após a selagem. Alterações legítimas a esses arquivos exigem atualizar o contrato antes da execução.\n\n`{python}` significa o interpretador do controlador. Comandos são arrays de argumentos, sem shell implícito. Formatadores precisam estar em modo check. Dependências, bancos de teste e serviços devem existir nas worktrees; o controlador não instala nem inventa esses serviços. Para executar em paralelo, os próprios checks precisam isolar bancos, portas e arquivos externos — worktrees não isolam recursos fora do checkout.
+O controlador sela os testes de aceite, arquivos de teste convencionais, manifestos/lockfiles, configurações reconhecidas de runners e scripts explicitamente referenciados pelos checks. Use `verification.protected_paths` para **dependências próprias do projeto** que não sejam descobertas automaticamente. Exemplo:
 
-Os papéis configuráveis padrão são:
+```toml
+[verification]
+mutation_policy = "critical"
+require_human = "critical"
+trusted_signers = ""
+protected_paths = ["checks/support/", "fixtures/contract.json"]
+```
+
+Os caminhos adicionais devem existir e estar versionados no Git; arquivos protegidos novos ou modificados depois da selagem bloqueiam o fluxo. Se houver necessidade legítima de alterar o contrato de testes, prepare uma nova Spec/baseline antes de executar o plano. Essa proteção é uma política de integridade do controlador, não uma sandbox de sistema operacional.
+
+`{python}` significa o interpretador do controlador. Comandos são arrays de argumentos, sem shell implícito. Formatadores precisam estar em modo check. Dependências, bancos de teste e serviços devem existir nas worktrees; o controlador não instala nem inventa esses serviços. Para executar em paralelo, os próprios checks precisam isolar bancos, portas e arquivos externos — worktrees não isolam recursos fora do checkout.
+
+Os papéis configuráveis padrão são (identificadores declarados pelo projeto; **a disponibilidade real deve ser verificada na conta e no CLI**):
 
 | Papel | Model ID | Implementação | Revisão |
 |---|---|---|---|
@@ -144,9 +157,17 @@ Cada `[models.PAPEL]` permite `model`, `effort`, `review_effort` e `family`. Nã
 
 ### Política de risco
 
-Auth/autorização/tenancy, pagamentos, migrations, concorrência, segredos e infraestrutura possuem detectores embutidos. Nomes de caminhos e intenção textual são **indícios** que impõem piso Terra, sem aprovação humana automática. O diff com linhas materiais de código em área sensível, tags críticas declaradas/herdadas, regras explícitas do projeto ou conteúdo binário/opaco impõem piso **Sol implementa → Astra revisa**, com verificação adversarial e assinatura externa. Mudanças exclusivamente em comentários ou documentação não se tornam críticas só pelo nome do arquivo. Uma heurística lexical continua insuficiente para decidir todos os casos semânticos.
+O roteamento distingue **indício de risco** de **alteração material em código sensível**. A avaliação usa objetivo, escopos, arquivos do projeto, diff e tags explícitas:
 
-Regras são monotônicas: o plano não desativa detectores e filhos não descartam o risco herdado. Uma descoberta após edição preserva o patch e exige reavaliação pelo executor superior. Regras de caminhos específicas do projeto devem complementar os detectores; nenhuma heurística lexical garante descobrir todo risco semântico.
+| Situação | Piso de execução | Verificação crítica |
+|---|---|---|
+| Sem indício especial | `minimum_tier` configurado (padrão Luna) | Não, salvo regra externa mais restritiva |
+| Referência lexical a autenticação, pagamentos, migrations, concorrência, segredos ou infraestrutura, sem alteração material sensível identificada | No mínimo Terra | Não automaticamente |
+| Mudança material em arquivo/código sensível, tag crítica explícita ou herdada, padrão de projeto em `extra_patterns`, conteúdo grande/opaco/binário | Sol → revisão por Astra | Sim: checks adversariais, sondas de mutação e aprovação humana assinada |
+
+Alterações exclusivamente em documentação e comentários não são classificadas como críticas apenas pelo nome do caminho. A classificação é **monotônica**: uma elevação de risco descoberta durante a execução não é revertida silenciosamente, e tarefas filhas/reparos herdam a criticidade relevante. `extra_patterns` são regras conservadoras obrigatórias, não apenas dicas.
+
+**Limitação:** as heurísticas de texto e diff não demonstram ausência de risco semântico. Configure padrões explícitos para superfícies sensíveis específicas do projeto e revise a Spec, especialmente quando a mudança envolve autorização, dados financeiros ou infraestrutura de produção.
 
 ## Plano e contrato de testes
 
@@ -185,19 +206,42 @@ Exemplo completo: [examples/demo.plan.json](examples/demo.plan.json).
 
 Cada critério precisa de mapeamento a pelo menos um check. `baseline` é `pass` ou `fail`, com justificativa; falha esperada deve ser um contraexemplo conhecido, não runner quebrado. Todos os campos são obrigatórios. Critérios e checks de filhos são subconjuntos do contrato já revisado: um executor não pode inventar um novo oráculo permissivo.
 
-Para alterações críticas, `test_contract.mutations` é obrigatório por padrão:
+### Mutation testing orientado a evidências
+
+Por padrão, `verification.mutation_policy = "critical"` exige **ao menos uma mutação pré-aprovada** para tarefas críticas. Cada sonda é executada em uma worktree descartável depois dos checks verdes; o controlador exige uma falha do check de aceite com marcador esperado e vincula a evidência ao snapshot. Mutantes sobreviventes, falhas por motivo inesperado e sondas indisponíveis bloqueiam a entrega.
+
+**Estratégia recomendada — `file_replacement`:** fornece uma implementação/artefato propositalmente incorreto, sem depender de uma substring da solução gerada.
 
 ```json
-"mutations": [{"file":"src/textutil.py","find":"return value.strip()","replace":"return value","check":"acceptance","failure_marker":"AssertionError"}]
+"mutations": [
+  {
+    "strategy": "file_replacement",
+    "file": "textutil.py",
+    "content": "def normalize_label(value):\n    return value\n",
+    "check": "unit",
+    "failure_marker": "AssertionError"
+  }
+]
 ```
 
-Prefira a estratégia `file_replacement`, com um contraexemplo preaprovado independente do texto gerado, por exemplo: `{"strategy":"file_replacement","file":"src/textutil.py","content":"def normalize_label(value):\\n    return value\\n","check":"acceptance","failure_marker":"AssertionError"}`. O modo `exact_replace` continua disponível para código textual estável.\n\nO controlador aplica cada mutação em uma worktree descartável **após os checks
-verdes**, exige que o teste de aceite falhe com o marcador previsto e grava
-prova vinculada ao snapshot. Um mutante sobrevivente, timeout ou falha por motivo
-errado bloqueia o fluxo. Use `mutation_policy = "all"` para exigir o mecanismo
-em toda tarefa, ou `"optional"` para permitir tarefas sem sondas. A mutação é
-especificada antes de executar qualquer modelo, junto ao contrato revisado pelo
-Astra. Veja [Q2-VERIFICATION.md](docs/Q2-VERIFICATION.md).
+O contraexemplo precisa continuar **sintática e estruturalmente válido** e representar uma regressão real; não basta fazer o teste falhar por importação quebrada ou ambiente ausente.
+
+**Compatibilidade — `exact_replace`:** preserva planos antigos e substitui um trecho literal existente exatamente uma vez. É útil quando o código é estável, mas pode bloquear uma implementação correta que use outra expressão.
+
+```json
+"mutations": [
+  {
+    "strategy": "exact_replace",
+    "file": "textutil.py",
+    "find": "return value.strip()",
+    "replace": "return value",
+    "check": "unit",
+    "failure_marker": "AssertionError"
+  }
+]
+```
+
+O campo `strategy` é opcional para planos legados com `find` e `replace` (equivale a `exact_replace`). Para `file_replacement`, use `content`, sem `find`/`replace`. `mutation_policy = "all"` exige sondas em todas as tarefas; `"optional"` permite ausência de sondas, mas não desativa os demais gates críticos. Consulte [Q2-VERIFICATION.md](docs/Q2-VERIFICATION.md).
 
 `scope` é permissão de escrita; `reads` declara dependências relevantes ao scheduler e ao reuso de revisões. Use arquivos exatos ou prefixos terminados em `/`, nunca globs. Arquivos de controle e todos os testes principais são protegidos contra escrita, inclusive por outras tarefas.
 
@@ -436,27 +480,53 @@ O smoke verifica o acesso e a saída estruturada dos quatro modelos. **Não é u
 teste E2E do fluxo.** Depois execute o exemplo do README em um repositório
 temporário com modelos autenticados, e confira o `gate` final.
 
-Para comparar qualidade/custo de múltiplas execuções idênticas:
+### Benchmark de execução e custo
+
+Compare execuções do orquestrador que tenham **o mesmo commit-base e o mesmo hash de plano**:
 
 ```bash
 codex-orchestrator --repo /caminho/projeto benchmark RUN_ID_1 RUN_ID_2
 ```
 
-Para medir a contribuição econômica da orquestração, o relatório agora separa consumo, chamadas e tempo de implementação e verificação. A comparação com Sol direto exige medições externas no mesmo commit e plano:
+O relatório segmenta métricas observadas de **implementação** e **verificação** (quantidade de chamadas, tokens e custo quando informado). Também apresenta duração reportada, aprovações verificadas, revisões solicitando alterações, falhas de checks, sensibilidade a mutações e intervalo de Wilson de 95% para a taxa observada de aprovação. Amostras com menos de 10 execuções por variante são identificadas como exploratórias.
+
+Para comparar o overhead da orquestração com execuções **diretas de Sol**, colete medições independentes sob a mesma Spec e commit:
 
 ```bash
-codex-orchestrator --repo /caminho/projeto benchmark RUN_ID_1 RUN_ID_2 --direct-baseline direct-sol.json
+codex-orchestrator --repo /caminho/projeto benchmark RUN_ID_1 RUN_ID_2 \
+  --direct-baseline direct-sol.json
 ```
 
-O arquivo `direct-sol.json` tem formato `{"version":1,"baseline_commit":"<commit>","plan_sha256":"<hash>","source":"direct-sol","trials":[{"approved":true,"tokens":1000,"seconds":28.5,"cost_usd":"0.01","evidence":"log-1"},{"approved":false,"tokens":1200,"seconds":35.0,"cost_usd":"0.02","evidence":"log-2"}]}`. `cost_usd` aceita `null` quando desconhecido; nesse caso não existe comparativo monetário. Evidências externas são autodeclaradas até passarem por revisão independente; nenhum resultado real é fabricado.
+Formato de `direct-sol.json` (valores **meramente ilustrativos**, não resultados medidos do projeto):
 
-O benchmark exige o mesmo commit-base e hash do plano; mede gates aprovados,
-intervalos estatísticos, revisões, mutações detectadas, tokens e custos reais
-reportados. **Não inventa notas de 0–100 nem infere qualidade idêntica entre
-modelos.** Amostras pequenas recebem a classificação `exploratory`.
+```json
+{
+  "version": 1,
+  "baseline_commit": "SHA_DO_COMMIT_BASE",
+  "plan_sha256": "HASH_DO_PLANO",
+  "source": "direct-sol",
+  "trials": [
+    {
+      "approved": true,
+      "tokens": 1000,
+      "seconds": 28.5,
+      "cost_usd": "0.01",
+      "evidence": "logs/direct-sol-01.json"
+    },
+    {
+      "approved": false,
+      "tokens": 1200,
+      "seconds": 35.0,
+      "cost_usd": "0.02",
+      "evidence": "logs/direct-sol-02.json"
+    }
+  ]
+}
+```
 
-A matriz de propriedades verificáveis e dependências externas está em
-[docs/Q2-VERIFICATION.md](docs/Q2-VERIFICATION.md).
+O arquivo precisa incluir pelo menos **duas tentativas** e as mesmas referências de commit/plano. `cost_usd` aceita `null` quando não existe valor monetário confiável. O controlador valida o formato, mas **não autentica as evidências externas nem garante equivalência de qualidade**. A razão entre custos por entrega é exibida somente quando há custos informados e entregas aprovadas em ambos os grupos; isso não equivale a um resultado causal ou à comprovação de economia. Para validação de qualidade, compare defeitos encontrados por avaliação externa independente e repita os experimentos em volume suficiente.
+
+A matriz de propriedades verificáveis está em [Q2-VERIFICATION.md](docs/Q2-VERIFICATION.md).
 
 ## Limites explícitos
 
@@ -481,7 +551,10 @@ codex_orchestrator/
   system.py     Git, processos, locks e arquivos
   hooks.py      ciclo de vida e telemetria opcional
   install.py    instalação conservadora/migração
-  cli.py        comandos
+  quality.py    sondas de mutação e evidências de sensibilidade
+  benchmark.py  relatório de qualidade/custo e baseline externo
+  smoke.py      teste opt-in de conectividade dos modelos
+  cli.py        interface de linha de comando
 examples/       baseline e contrato de demonstração
 tests/          unitários e integração com CLI explicitamente simulado
 docs/           matriz Q1 e relatório de validação
