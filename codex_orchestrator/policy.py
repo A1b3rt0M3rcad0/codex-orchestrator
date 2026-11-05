@@ -156,10 +156,19 @@ def seal(root: Path, plan: dict, config: dict) -> dict:
         if any(in_scope(name, t["scope"]) for t in plan["tasks"]):
             raise OrchestratorError(f"Protected test/config file overlaps implementation scope: {name}")
         result[name] = {"sha256": file_hash(path), "mode": path.stat().st_mode & 0o777}
+    # Keep policy in the sealed manifest so newly created protected files
+    # cannot silently become new test implementations or runner adapters.
+    result["$protected_paths"] = {"paths": list(config["verification"]["protected_paths"])}
     return result
 
 def guard(root: Path, manifest: dict) -> None:
+    protected = manifest.get("$protected_paths", {}).get("paths", [])
+    for name in set(tracked(root)) | set(changed(root)):
+        if (_runner_dependency(name) or in_scope(name, protected)) and name not in manifest:
+            raise OrchestratorError(f"Protected runner path was added after sealing: {name}")
     for name, expected in manifest.items():
+        if name == "$protected_paths":
+            continue
         path = root / name
         if (not path.is_file() or path.is_symlink() or not path.resolve().is_relative_to(root.resolve()) or
             file_hash(path) != expected["sha256"] or path.stat().st_mode & 0o777 != expected["mode"]):

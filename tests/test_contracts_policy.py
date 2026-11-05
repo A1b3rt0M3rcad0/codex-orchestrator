@@ -170,6 +170,23 @@ class PolicyTests(ProjectCase):
                 guard(self.root,manifest)
             path.write_bytes(before)
 
+    def test_new_test_file_after_seal_is_rejected(self):
+        manifest = seal(self.root,self.plan,load_config(self.root))
+        (self.root/'tests').mkdir()
+        (self.root/'tests/new_helper.py').write_text('ALLOW = True\n')
+        with self.assertRaisesRegex(OrchestratorError,'added after sealing'):
+            guard(self.root,manifest)
+
+    def test_new_custom_support_file_after_seal_is_rejected(self):
+        (self.root/'checks').mkdir()
+        (self.root/'checks/original.data').write_text('strict')
+        self.cfg['verification']={'protected_paths':['checks/']}
+        self.flush()
+        manifest=seal(self.root,self.plan,load_config(self.root))
+        (self.root/'checks/new.data').write_text('weak')
+        with self.assertRaisesRegex(OrchestratorError,'added after sealing'):
+            guard(self.root,manifest)
+
     def test_explicit_runner_support_paths_are_sealed(self):
         (self.root/'checks').mkdir()
         (self.root/'checks/helper.data').write_text('strict')
