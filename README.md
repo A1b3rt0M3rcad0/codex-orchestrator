@@ -1,10 +1,10 @@
 <div align="center">
 
-# Codex Orchestrator
+<h1>Codex Orchestrator</h1>
 
-**Orquestração determinística de agentes de código, com execução multi-modelo, revisão independente e evidências verificáveis.**
+<p><strong>Orquestração determinística de agentes de código, com execução multi-modelo, revisão independente e evidências verificáveis.</strong></p>
 
-Planeje com Astra. Execute com Luna, Terra ou Sol. Valide com critérios de aceite, checkpoints e gates reais.
+<p>Planeje com Astra. Execute com Luna, Terra ou Sol. Valide com critérios de aceite, checkpoints e gates reais.</p>
 
 <p>
   <a href="https://github.com/A1b3rt0M3rcad0/codex-orchestrator/actions/workflows/tests.yml">
@@ -15,7 +15,13 @@ Planeje com Astra. Execute com Luna, Terra ou Sol. Valide com critérios de acei
   <img src="https://img.shields.io/badge/vers%C3%A3o-0.3.0-475569" alt="Versão 0.3.0">
 </p>
 
-[Início rápido](#início-rápido) · [Arquitetura](#arquitetura) · [Skills por tarefa](#skills-por-tarefa) · [Qualidade e segurança](#qualidade-e-segurança) · [Comandos](#referência-de-comandos)
+<p>
+  <a href="#início-rápido">Início rápido</a> ·
+  <a href="#arquitetura">Arquitetura</a> ·
+  <a href="#skills-por-tarefa">Skills por tarefa</a> ·
+  <a href="#qualidade-e-segurança">Qualidade e segurança</a> ·
+  <a href="#referência-de-comandos">Comandos</a>
+</p>
 
 </div>
 
