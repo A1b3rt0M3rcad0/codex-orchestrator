@@ -109,7 +109,7 @@ class ContractTests(unittest.TestCase):
 
 
 class PolicyTests(ProjectCase):
-    def test_builtin_risk_categories_force_sol(self):
+    def test_path_hints_use_terra_without_automatic_critical_gate(self):
         cfg = load_config(self.root)
         samples = {'auth':'src/auth/service.py', 'payments':'src/payments/charge.py', 'migrations':'db/migrations/001.sql',
                    'concurrency':'src/mutex.py', 'secrets':'src/api_key.py', 'infrastructure':'Dockerfile'}
@@ -117,7 +117,69 @@ class PolicyTests(ProjectCase):
             t = copy.deepcopy(self.plan['tasks'][0]); t['scope'] = [scope]
             risk = assess(t, cfg)
             with self.subTest(category=category):
-                self.assertIn(category, risk['tags']); route(t, risk); self.assertEqual(t['tier'], 'sol')
+                self.assertIn(category, risk['tags']); self.assertFalse(risk['critical'])
+                route(t, risk); self.assertEqual(t['tier'], 'terra')
+
+    def test_sensitive_code_change_escalates_but_docs_only_do_not(self):
+        (self.root/'src/auth').mkdir(parents=True)
+        path = self.root/'src/auth/service.py'
+        path.write_text('value = 1\n')
+        (self.root/'docs').mkdir()
+        docs = self.root/'docs/auth.md'
+        docs.write_text('Original documentation\n')
+        self.flush()
+        base = git(self.root, 'rev-parse', 'HEAD')
+        t = copy.deepcopy(self.plan['tasks'][0])
+        t['scope'] = ['src/auth/service.py']
+        cfg = load_config(self.root)
+        self.assertFalse(assess(t,cfg,self.root,base)['critical'])
+        path.write_text('value = 2\n')
+        risk = assess(t,cfg,self.root,base)
+        self.assertTrue(risk['critical'])
+        self.assertEqual(risk['minimum_tier'], 'sol')
+        docs.write_text('Updated documentation\n')
+        t['scope'] = ['docs/auth.md']
+        doc_risk = assess(t,cfg,self.root,base)
+        self.assertFalse(doc_risk['critical'])
+        self.assertEqual(doc_risk['minimum_tier'], 'terra')
+
+    def test_comment_only_sensitive_change_is_not_critical(self):
+        (self.root/'src/auth').mkdir(parents=True)
+        path = self.root/'src/auth/service.py'
+        path.write_text('value = 1\n')
+        self.flush()
+        base = git(self.root, 'rev-parse', 'HEAD')
+        path.write_text('value = 1\n# Updated auth comment\n')
+        t = copy.deepcopy(self.plan['tasks'][0])
+        t['scope'] = ['src/auth/service.py']
+        self.assertFalse(assess(t,load_config(self.root),self.root,base)['critical'])
+
+    def test_test_runner_manifest_protects_dependencies_and_helpers(self):
+        (self.root/'package.json').write_text('{"scripts":{"test":"vitest"}}')
+        (self.root/'package-lock.json').write_text('{"lockfileVersion":3}')
+        (self.root/'tests').mkdir()
+        (self.root/'tests/helper.py').write_text('MODE = "strict"\n')
+        self.flush()
+        manifest = seal(self.root,self.plan,load_config(self.root))
+        for name in ('package.json','package-lock.json','tests/helper.py'):
+            self.assertIn(name,manifest)
+            path=self.root/name
+            before=path.read_bytes()
+            path.write_bytes(b'tampered')
+            with self.assertRaisesRegex(OrchestratorError,'Protected'):
+                guard(self.root,manifest)
+            path.write_bytes(before)
+
+    def test_explicit_runner_support_paths_are_sealed(self):
+        (self.root/'checks').mkdir()
+        (self.root/'checks/helper.data').write_text('strict')
+        self.cfg['verification']={'protected_paths':['checks/']}
+        self.flush()
+        manifest=seal(self.root,self.plan,load_config(self.root))
+        self.assertIn('checks/helper.data',manifest)
+        (self.root/'checks/helper.data').write_text('weak')
+        with self.assertRaisesRegex(OrchestratorError,'Protected'):
+            guard(self.root,manifest)
 
     def test_generic_payload_and_author_not_payments_or_auth(self):
         t = copy.deepcopy(self.plan['tasks'][0]); t['objective'] = 'Format the payload and author display name'
